@@ -121,7 +121,7 @@ RESPONSE FORMAT RULES:
    \`\`\`mermaid
    graph TD
      subgraph Input_Phase["Data Collection"]
-       A(["Start"]) --> B["Receive user query"]
+       A["Start"] --> B["Receive user query"]
        B --> C["Load uploaded document"]
      end
      subgraph Analysis_Phase["Intelligent Processing"]
@@ -143,7 +143,7 @@ RESPONSE FORMAT RULES:
      subgraph Output_Phase["Response Delivery"]
        L --> N["Format with tables and diagrams"]
        M --> N
-       N --> O(["End"])
+       N --> O["End"]
      end
      classDef primary fill:#4f46e5,stroke:#3730a3,color:#fff
      classDef decision fill:#f59e0b,stroke:#d97706,color:#000

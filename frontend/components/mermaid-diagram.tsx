@@ -21,11 +21,12 @@ function sanitizeMermaidCode(rawChart: string): string {
     .replace(/```\s*$/g, '')
     .trim();
 
-  // Remove emoji characters — Mermaid parser cannot handle them
+  // 1. Remove emoji characters — Mermaid parser cannot handle them
   clean = clean.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '');
 
-  // If it doesn't start with a known diagram type, prepend graph TD
-  const firstLine = clean.split('\n')[0].trim().toLowerCase();
+  // 2. Ensure valid diagram header
+  const lines = clean.split('\n');
+  const firstLine = lines[0].trim().toLowerCase();
   if (
     !firstLine.startsWith('graph ') &&
     !firstLine.startsWith('flowchart ') &&
@@ -43,23 +44,33 @@ function sanitizeMermaidCode(rawChart: string): string {
     clean = `graph TD\n${clean}`;
   }
 
-  // Auto-quote unquoted node labels that contain special characters
-  // Match patterns like A[Label Text] but NOT A["Already Quoted"] and NOT subgraph lines
-  clean = clean.replace(/^(\s*)([A-Za-z][A-Za-z0-9_]*)\[([^\]"\n]+)\]/gm, (match, indent, nodeId, label) => {
-    // Skip if it's a subgraph definition
-    if (match.trim().toLowerCase().startsWith('subgraph')) return match;
-    if (label.includes('(') || label.includes(')') || label.includes(':') || label.includes('/') || label.includes('&') || label.includes(',')) {
-      const safeLabel = label.replace(/"/g, "'").trim();
-      return `${indent}${nodeId}["${safeLabel}"]`;
-    }
-    return match;
+  // 3. Normalize quote duplicates before pattern matching
+  clean = clean.replace(/""+/g, '"');
+
+  // 4. Auto-quote decision node labels: C{Label} -> C{"Label"}
+  clean = clean.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
+    if (label.startsWith('"') && label.endsWith('"')) return `${id}{${label}}`;
+    const cleanLabel = label.replace(/"/g, "'").trim();
+    return `${id}{"${cleanLabel}"}`;
   });
 
-  // Auto-quote decision node labels: C{Label} => C{"Label"}
-  clean = clean.replace(/^(\s*)([A-Za-z][A-Za-z0-9_]*)\{([^}"\n]+)\}/gm, (match, indent, nodeId, label) => {
-    const safeLabel = label.replace(/"/g, "'").trim();
-    return `${indent}${nodeId}{"${safeLabel}"}`;
+  // 5. Auto-quote stadium nodes: A([Start]) -> A(["Start"])
+  clean = clean.replace(/([A-Za-z0-9_]+)\(\[([^\]"\n]+)\]\)/g, (m, id, label) => {
+    if (label.startsWith('"') && label.endsWith('"')) return `${id}([${label}])`;
+    const cleanLabel = label.replace(/"/g, "'").trim();
+    return `${id}(["${cleanLabel}"])`;
   });
+
+  // 6. Auto-quote standard rectangle nodes: B[Process] -> B["Process"]
+  clean = clean.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
+    if (m.trim().toLowerCase().startsWith('subgraph')) return m;
+    if (label.startsWith('"') && label.endsWith('"')) return `${id}[${label}]`;
+    const cleanLabel = label.replace(/"/g, "'").trim();
+    return `${id}["${cleanLabel}"]`;
+  });
+
+  // 7. Final pass to clean any accidental double double-quotes
+  clean = clean.replace(/""+/g, '"');
 
   return clean;
 }
