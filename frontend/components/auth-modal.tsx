@@ -58,6 +58,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
   
   // OTP Verification States
   const [showOtpView, setShowOtpView] = useState<boolean>(false);
+  const [showFallbackOtp, setShowFallbackOtp] = useState<boolean>(false);
   const [generatedOtp, setGeneratedOtp] = useState<string>('');
   const [enteredOtp, setEnteredOtp] = useState<string>('');
   const [pendingUser, setPendingUser] = useState<UserProfile | null>(null);
@@ -324,6 +325,30 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
               >
                 Change Email
               </button>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-center">
+              <button
+                type="button"
+                className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
+                onClick={() => setShowFallbackOtp(!showFallbackOtp)}
+              >
+                {showFallbackOtp ? 'Hide verification code' : "Didn't receive email? View verification code"}
+              </button>
+
+              {showFallbackOtp && (
+                <div className="mt-2.5 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-center animate-in fade-in">
+                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                    Verification Code
+                  </p>
+                  <div className="text-xl font-black tracking-widest text-amber-700 dark:text-amber-300 font-mono my-1">
+                    {generatedOtp}
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    Use this code to sign in if your email delivery is delayed.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         ) : showGooglePicker ? (
