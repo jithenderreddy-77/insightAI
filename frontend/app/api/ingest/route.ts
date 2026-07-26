@@ -15,8 +15,8 @@ import { createClient } from '@supabase/supabase-js';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 
 // Configuration constants
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const MAX_FILES = 10;
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB per file
+const MAX_FILES = 50; // up to 50 files simultaneously
 
 function isFileSupported(file: File): boolean {
   if (SUPPORTED_MIME_TYPES.includes(file.type)) {
