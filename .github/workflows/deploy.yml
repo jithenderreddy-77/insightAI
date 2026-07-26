@@ -1,7 +1,7 @@
 # .github/workflows/deploy.yml
-# GitHub Actions CI/CD Pipeline for Automated Building and Vercel Deployment
+# GitHub Actions CI/CD Pipeline for Building, Verifying, and Deploying
 
-name: CI/CD Pipeline & Vercel Deployment
+name: CI/CD Pipeline & Build Verification
 
 on:
   push:
@@ -23,12 +23,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
 
       - name: Install Frontend Dependencies
         run: |
@@ -40,13 +38,13 @@ jobs:
           cd frontend
           npm run build
         env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://dummy.supabase.co' }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'dummy-key' }}
 
   deploy:
     name: Deploy to Vercel Production
     needs: build-and-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.VERCEL_TOKEN != ''
     runs-on: ubuntu-latest
 
     steps:
