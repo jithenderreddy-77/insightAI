@@ -79,19 +79,34 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     return /^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(trimmed);
   };
 
-  const sendOtpForGmail = (userToVerify: UserProfile) => {
+  const sendOtpForGmail = async (userToVerify: UserProfile) => {
     if (!userToVerify.email || !isValidGmail(userToVerify.email)) {
       setErrorMessage('Invalid Gmail address. Please enter a valid @gmail.com email.');
       return;
     }
 
     setErrorMessage(null);
-    // Generate 6-digit random OTP
+    // Generate 6-digit secret OTP verification code
     const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedOtp(newOtp);
     setPendingUser(userToVerify);
     setEnteredOtp('');
     setShowOtpView(true);
+
+    // Dispatch secret OTP code email asynchronously to Gmail address
+    try {
+      await fetch('/api/send-otp-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userToVerify.email,
+          otpCode: newOtp,
+          displayName: userToVerify.displayName,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to dispatch OTP email:', err);
+    }
   };
 
   const handleSignIn = (e: React.FormEvent) => {
@@ -157,7 +172,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     const username = email.split('@')[0].replace(/\s+/g, '_');
 
     const customAccount: UserProfile = {
-      id: `google_${username}_${Date.now()}`,
+      id: `user_${username}`,
       username,
       displayName,
       email,
@@ -175,12 +190,12 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
       return;
     }
 
-    if (pendingUser) {
-      saveUser(pendingUser);
-      if (pendingUser.email) {
-        triggerWelcomeEmail(pendingUser.displayName, pendingUser.email);
-      }
-      onLoginSuccess(pendingUser);
+    if (pendingUser && pendingUser.email) {
+      const { registerOrLoginGoogleAccount } = require('@/lib/history-store');
+      const authResult = registerOrLoginGoogleAccount(pendingUser.email, pendingUser.displayName);
+      
+      triggerWelcomeEmail(authResult.user.displayName, authResult.user.email || pendingUser.email);
+      onLoginSuccess(authResult.user);
       resetAllStates();
       onClose();
     }
