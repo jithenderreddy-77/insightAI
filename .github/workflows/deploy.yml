@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  build-and-verify:
     name: Build & Verify Application
     runs-on: ubuntu-latest
 
@@ -30,32 +30,11 @@ jobs:
 
       - name: Install Frontend Dependencies
         run: |
-          cd frontend
-          npm install --legacy-peer-deps
+          npm --prefix frontend install --legacy-peer-deps
 
       - name: Build Next.js Application
         run: |
-          cd frontend
-          npm run build
+          npm --prefix frontend run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://dummy.supabase.co' }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'dummy-key' }}
-
-  deploy:
-    name: Deploy to Vercel Production
-    needs: build-and-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.VERCEL_TOKEN != ''
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
-          working-directory: ./frontend
