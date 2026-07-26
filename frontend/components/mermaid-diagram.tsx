@@ -17,10 +17,21 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     let isMounted = true;
 
     const cleanDOMErrorNodes = () => {
-      if (typeof document !== 'undefined') {
-        const errorNodes = document.querySelectorAll('.error-icon, [id^="dmermaid"], div:contains("Syntax error")');
+      if (typeof document === 'undefined') return;
+      try {
+        const errorNodes = document.querySelectorAll('.error-icon, [id^="dmermaid"], [id^="mermaid-error"]');
         errorNodes.forEach((node) => node.remove());
-      }
+
+        document.querySelectorAll('div').forEach((div) => {
+          if (
+            (div.id && div.id.startsWith('dmermaid')) ||
+            (typeof div.className === 'string' && div.className.includes('error-icon')) ||
+            (div.textContent && div.textContent.includes('mermaid version 11'))
+          ) {
+            div.remove();
+          }
+        });
+      } catch {}
     };
 
     const renderDiagram = async () => {
@@ -37,6 +48,8 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
         const cleanChart = chart.trim();
         if (!cleanChart || cleanChart.length < 10) {
+          cleanDOMErrorNodes();
+          if (isMounted) setIsValid(false);
           return;
         }
 

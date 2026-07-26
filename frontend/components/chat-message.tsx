@@ -97,7 +97,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
                       const match = /language-(\w+)/.exec(className || '');
                       const codeString = String(children).replace(/\n$/, '');
 
-                      if (!inline && (match?.[1] === 'mermaid' || codeString.startsWith('graph ') || codeString.startsWith('sequenceDiagram') || codeString.startsWith('flowchart '))) {
+                      const trimmed = codeString.trim();
+                      const isMermaidLang = match?.[1] === 'mermaid';
+                      const isDiagramPattern = !inline && (trimmed.startsWith('graph ') || trimmed.startsWith('sequenceDiagram') || trimmed.startsWith('flowchart ')) && (trimmed.includes('-->') || trimmed.includes('->') || trimmed.includes('---|'));
+
+                      if (!inline && (isMermaidLang || isDiagramPattern)) {
                         return <MermaidDiagram chart={codeString} />;
                       }
 
