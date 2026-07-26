@@ -95,6 +95,7 @@ export function registerUserAccount(
 
   accounts.push(newAccount);
   localStorage.setItem(ACCOUNTS_DB_KEY, JSON.stringify(accounts));
+  syncAccountToCloud(newAccount);
 
   const profile: UserProfile = {
     id: newAccount.id,
@@ -105,6 +106,24 @@ export function registerUserAccount(
 
   saveUser(profile);
   return { user: profile };
+}
+
+function syncAccountToCloud(account: UserAccount) {
+  if (typeof window === 'undefined') return;
+  fetch('/api/admin/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save_account', account }),
+  }).catch(() => {});
+}
+
+function syncThreadToCloud(userId: string, thread: ChatThread) {
+  if (typeof window === 'undefined') return;
+  fetch('/api/admin/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save_thread', userId, thread }),
+  }).catch(() => {});
 }
 
 /**
@@ -141,6 +160,7 @@ export function authenticateUserAccount(
   };
 
   saveUser(profile);
+  syncAccountToCloud(found);
   return { user: profile };
 }
 
@@ -176,6 +196,8 @@ export function registerOrLoginGoogleAccount(
     accounts.push(found);
     localStorage.setItem(ACCOUNTS_DB_KEY, JSON.stringify(accounts));
   }
+
+  syncAccountToCloud(found);
 
   const profile: UserProfile = {
     id: found.id,
@@ -250,6 +272,7 @@ export function saveUserThread(userId: string, thread: ChatThread): void {
       `${THREADS_STORAGE_KEY_PREFIX}${userId}`,
       JSON.stringify(threads),
     );
+    syncThreadToCloud(userId, thread);
   } catch (error) {
     console.error('Error saving thread:', error);
   }

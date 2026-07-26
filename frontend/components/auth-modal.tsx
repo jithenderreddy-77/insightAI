@@ -262,16 +262,14 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
               </p>
             </div>
 
-            {/* DEMO OTP NOTICE BADGE */}
+            {/* EMAIL SENT NOTICE BADGE */}
             <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/60 text-center">
-              <p className="text-[11px] font-bold text-indigo-500 uppercase tracking-widest mb-1">
-                Gmail Verification Code
+              <p className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-1 flex items-center justify-center gap-1">
+                <Mail className="w-3.5 h-3.5" />
+                Secret Code Sent to Gmail
               </p>
-              <div className="text-2xl font-black tracking-widest text-indigo-700 dark:text-indigo-300 font-mono">
-                {generatedOtp}
-              </div>
-              <p className="text-[10px] text-slate-400 mt-1">
-                Enter this 6-digit OTP code below to complete sign-in.
+              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                Please check your Gmail inbox (<strong className="text-indigo-600">{pendingUser?.email}</strong>) and enter the 6-digit secret verification code below.
               </p>
             </div>
 
@@ -374,10 +372,10 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
 
             <div>
               <DialogTitle className="text-xl font-black text-slate-900 dark:text-slate-100">
-                Choose an account
+                Sign in with Gmail
               </DialogTitle>
               <p className="text-xs text-slate-500 mt-0.5">
-                to continue to <strong className="text-indigo-600">Insight</strong>
+                Enter your Gmail address to receive your 6-digit secret OTP verification code
               </p>
             </div>
 
@@ -389,107 +387,52 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
               </div>
             )}
 
-            {/* List of Google Accounts */}
-            {!showCustomGoogleInput ? (
-              <div className="space-y-2">
-                {SAMPLE_GOOGLE_ACCOUNTS.map((account) => (
-                  <div
-                    key={account.id}
-                    className="flex items-center justify-between p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:bg-indigo-50/60 dark:hover:bg-indigo-950/40 hover:border-indigo-200 transition-all cursor-pointer group"
-                    onClick={() => handleSelectGoogleAccount(account)}
-                  >
-                    <div className="flex items-center gap-3">
-                      {account.avatar ? (
-                        <img
-                          src={account.avatar}
-                          alt={account.displayName}
-                          className="w-10 h-10 rounded-full object-cover shadow-sm border border-slate-200"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
-                          {account.displayName.charAt(0)}
-                        </div>
-                      )}
-                      <div>
-                        <p className="text-xs font-bold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 transition-colors">
-                          {account.displayName}
-                        </p>
-                        <p className="text-[11px] text-slate-500">{account.email}</p>
-                      </div>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all" />
-                  </div>
-                ))}
-
-                {/* Option to use another account */}
-                <div
-                  className="flex items-center gap-3 p-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer text-indigo-600 dark:text-indigo-400 font-semibold text-xs mt-2"
-                  onClick={() => {
-                    setErrorMessage(null);
-                    setShowCustomGoogleInput(true);
-                  }}
-                >
-                  <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center">
-                    <UserPlus className="w-5 h-5" />
-                  </div>
-                  <span>Use another Google account</span>
-                </div>
-              </div>
-            ) : (
-              /* Custom Google Account Entry Form */
-              <form onSubmit={handleCustomGoogleSubmit} className="space-y-3 animate-in fade-in">
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                    Gmail Address
-                  </Label>
+            {/* Google Gmail Entry Form */}
+            <form onSubmit={handleCustomGoogleSubmit} className="space-y-3 animate-in fade-in">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                  Gmail Address
+                </Label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                   <Input
                     type="email"
-                    placeholder="user@gmail.com"
-                    className="rounded-xl border-slate-200 focus-visible:ring-indigo-500"
+                    placeholder="yourname@gmail.com"
+                    className="pl-9 rounded-xl border-slate-200 focus-visible:ring-indigo-500"
                     value={customGoogleEmail}
                     onChange={(e) => setCustomGoogleEmail(e.target.value)}
                     required
                   />
                 </div>
+              </div>
 
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                    Your Name
-                  </Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                  Full Name (Optional)
+                </Label>
+                <div className="relative">
+                  <User className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                   <Input
                     type="text"
                     placeholder="e.g. Alex Smith"
-                    className="rounded-xl border-slate-200 focus-visible:ring-indigo-500"
+                    className="pl-9 rounded-xl border-slate-200 focus-visible:ring-indigo-500"
                     value={customGoogleName}
                     onChange={(e) => setCustomGoogleName(e.target.value)}
-                    required
                   />
                 </div>
+              </div>
 
-                <div className="flex gap-2 pt-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex-1 rounded-xl text-xs font-bold"
-                    onClick={() => {
-                      setErrorMessage(null);
-                      setShowCustomGoogleInput(false);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold"
-                  >
-                    Send OTP & Continue
-                  </Button>
-                </div>
-              </form>
-            )}
+              <Button
+                type="submit"
+                className="w-full h-11 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-bold shadow-lg shadow-indigo-500/25 transition-all duration-200 gap-2 mt-2"
+              >
+                Send Secret OTP Code to Gmail
+                <ArrowRight className="w-4 h-4" />
+              </Button>
+            </form>
 
             <p className="text-[10px] text-slate-400 leading-relaxed pt-2 text-center">
-              To continue, Google will share your name, email address, and language preference with Insight.
+              Insight will send a secret 6-digit verification code directly to your Gmail address.
             </p>
           </div>
         ) : (
