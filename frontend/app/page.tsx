@@ -292,6 +292,8 @@ export default function Home() {
     lastRetrievedDocsRef.current = [];
 
     try {
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -301,6 +303,7 @@ export default function Home() {
           message: userMessage,
           threadId,
           fileNames: files.map((f) => f.name),
+          useLocalOffline: isOffline,
         }),
         signal: abortController.signal,
       });
@@ -385,21 +388,38 @@ export default function Home() {
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
       console.error('Error sending message:', error);
-      toast({
-        title: 'Error',
-        description:
-          'Failed to send message. Please try again.\n' +
-          (error instanceof Error ? error.message : 'Unknown error'),
-        variant: 'destructive',
-      });
-      setMessages((prev) => {
-        const newArr = [...prev];
-        if (newArr.length > 0) {
-          newArr[newArr.length - 1].content =
-            'Sorry, there was an error processing your message.';
-        }
-        return newArr;
-      });
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+      if (isOffline) {
+        toast({
+          title: '📡 Offline Mode Active',
+          description: 'Internet connection is unavailable. Ensure your local Ollama AI model is running.',
+        });
+        setMessages((prev) => {
+          const newArr = [...prev];
+          if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+            newArr[newArr.length - 1].content =
+              '📡 **Offline Mode Active**: You are currently offline without internet.\n\nTo answer queries 100% offline, please ensure your local Ollama AI model is started on your device:\n```bash\nollama run deepseek-r1:7b\n```\nOnce Ollama is running, Insight AI will answer all your document queries, tables, and flowcharts 100% offline!';
+          }
+          return newArr;
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description:
+            'Failed to send message. Please try again.\n' +
+            (error instanceof Error ? error.message : 'Unknown error'),
+          variant: 'destructive',
+        });
+        setMessages((prev) => {
+          const newArr = [...prev];
+          if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+            newArr[newArr.length - 1].content =
+              'Sorry, there was an error processing your message. Please try again.';
+          }
+          return newArr;
+        });
+      }
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
