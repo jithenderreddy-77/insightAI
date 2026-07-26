@@ -1,5 +1,6 @@
 // lib/history-store.ts
-// Local storage persistence manager for user accounts, credentials, chat threads, and document history
+// Persistent storage manager — Supabase DB is the SOURCE OF TRUTH.
+// localStorage is a local cache only. All auth & data survives redeployments.
 
 export interface UserProfile {
   id: string;
@@ -11,7 +12,7 @@ export interface UserProfile {
 }
 
 export interface UserAccount extends UserProfile {
-  passwordHash: string; // Stored securely in local account DB
+  passwordHash: string;
   createdAt: string;
 }
 
@@ -34,9 +35,6 @@ const USER_SESSION_KEY = 'insight_active_user_session';
 const ACCOUNTS_DB_KEY = 'insight_registered_user_accounts';
 const THREADS_STORAGE_KEY_PREFIX = 'insight_user_threads_';
 
-/**
- * Default guest profile if none signed in
- */
 export const DEFAULT_GUEST_USER: UserProfile = {
   id: 'guest-user',
   username: 'guest',
@@ -44,9 +42,10 @@ export const DEFAULT_GUEST_USER: UserProfile = {
   isGuest: true,
 };
 
-/**
- * Gets all registered user accounts from storage
- */
+// ─────────────────────────────────────────────────────────
+// LOCAL CACHE HELPERS (localStorage)
+// ─────────────────────────────────────────────────────────
+
 export function getRegisteredAccounts(): UserAccount[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -58,14 +57,45 @@ export function getRegisteredAccounts(): UserAccount[] {
   }
 }
 
-/**
- * Registers a new user account with Full Name, Gmail Address, and Password
- */
-export function registerUserAccount(
+function saveAccountToLocalCache(account: UserAccount) {
+  if (typeof window === 'undefined') return;
+  const accounts = getRegisteredAccounts();
+  const idx = accounts.findIndex((a) => a.id === account.id || a.email === account.email);
+  if (idx >= 0) {
+    accounts[idx] = account;
+  } else {
+    accounts.push(account);
+  }
+  localStorage.setItem(ACCOUNTS_DB_KEY, JSON.stringify(accounts));
+}
+
+// ─────────────────────────────────────────────────────────
+// SERVER API CALLS (Supabase = Source of Truth)
+// ─────────────────────────────────────────────────────────
+
+async function callAuthAPI(body: any): Promise<any> {
+  try {
+    const res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('Auth API call failed:', err);
+    return { success: false, error: 'Network error — operating in offline mode' };
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// REGISTER — Creates account in Supabase DB + local cache
+// ─────────────────────────────────────────────────────────
+
+export async function registerUserAccount(
   displayName: string,
   gmailInput: string,
   password: string,
-): { user: UserProfile; error?: string } {
+): Promise<{ user: UserProfile; error?: string }> {
   if (typeof window === 'undefined') {
     return { user: DEFAULT_GUEST_USER, error: 'Browser environment required' };
   }
@@ -77,25 +107,32 @@ export function registerUserAccount(
   }
   if (!password || password.length < 3) return { user: DEFAULT_GUEST_USER, error: 'Password must be at least 3 characters' };
 
-  const accounts = getRegisteredAccounts();
-  const existing = accounts.find((a) => a.email === cleanGmail || a.username === cleanGmail);
-  if (existing) {
-    return { user: DEFAULT_GUEST_USER, error: 'Account with this Gmail already exists. Please sign in instead.' };
-  }
-
   const userKey = cleanGmail.replace(/[^a-zA-Z0-9]/g, '_');
   const newAccount: UserAccount = {
     id: `user_${userKey}`,
     username: cleanGmail,
     displayName: displayName.trim() || cleanGmail.split('@')[0],
     email: cleanGmail,
-    passwordHash: btoa(password), // Safely stored in browser local account DB
+    passwordHash: btoa(password),
     createdAt: new Date().toISOString(),
   };
 
-  accounts.push(newAccount);
-  localStorage.setItem(ACCOUNTS_DB_KEY, JSON.stringify(accounts));
-  syncAccountToCloud(newAccount);
+  // 1. Save to Supabase DB (source of truth)
+  const dbResult = await callAuthAPI({
+    action: 'register',
+    ...newAccount,
+  });
+
+  if (dbResult.success === false && dbResult.error) {
+    // If DB says account exists, check if local cache has it
+    if (dbResult.error.includes('already exists')) {
+      return { user: DEFAULT_GUEST_USER, error: dbResult.error };
+    }
+    // DB error but not "already exists" — fall through to local registration
+  }
+
+  // 2. Also save to local cache
+  saveAccountToLocalCache(newAccount);
 
   const profile: UserProfile = {
     id: newAccount.id,
@@ -108,84 +145,116 @@ export function registerUserAccount(
   return { user: profile };
 }
 
-function syncAccountToCloud(account: UserAccount) {
-  if (typeof window === 'undefined') return;
-  fetch('/api/admin/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'save_account', account }),
-  }).catch(() => {});
-}
+// ─────────────────────────────────────────────────────────
+// LOGIN — Authenticates from Supabase DB first, then local cache fallback
+// ─────────────────────────────────────────────────────────
 
-function syncThreadToCloud(userId: string, thread: ChatThread) {
-  if (typeof window === 'undefined') return;
-  fetch('/api/admin/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'save_thread', userId, thread }),
-  }).catch(() => {});
-}
-
-/**
- * Authenticates a user with Gmail address and password
- */
-export function authenticateUserAccount(
+export async function authenticateUserAccount(
   gmailInput: string,
   password: string,
-): { user?: UserProfile; error?: string } {
+): Promise<{ user?: UserProfile; error?: string }> {
   if (typeof window === 'undefined') return { error: 'Browser environment required' };
 
   const cleanGmail = gmailInput.trim().toLowerCase();
   if (!cleanGmail) return { error: 'Please enter your Gmail address' };
 
-  const accounts = getRegisteredAccounts();
-  const found = accounts.find((a) => a.email === cleanGmail || a.username === cleanGmail);
+  const passwordHash = btoa(password);
 
-  if (!found) {
-    return {
-      error: 'Account with this Gmail does not exist. Please click "Create Account" to register first.',
+  // 1. Try Supabase DB first (source of truth — survives redeployments!)
+  const dbResult = await callAuthAPI({
+    action: 'login',
+    email: cleanGmail,
+    passwordHash,
+  });
+
+  if (dbResult.success && dbResult.account) {
+    const acc = dbResult.account;
+    const profile: UserProfile = {
+      id: acc.id,
+      username: acc.username,
+      displayName: acc.displayName,
+      email: acc.email,
+      avatar: acc.avatar,
     };
+
+    // Sync account to local cache so subsequent operations are fast
+    saveAccountToLocalCache({
+      id: acc.id,
+      username: acc.username,
+      displayName: acc.displayName,
+      email: acc.email,
+      avatar: acc.avatar,
+      passwordHash: acc.passwordHash,
+      createdAt: acc.createdAt,
+    });
+
+    saveUser(profile);
+
+    // Also load user's cloud chat threads into local cache
+    loadCloudThreadsToLocal(acc.id);
+
+    return { user: profile };
   }
 
-  if (found.passwordHash !== btoa(password)) {
-    return { error: 'Incorrect password. Please try again.' };
+  // 2. Fallback to local cache if DB is unreachable
+  if (dbResult.error === 'Network error — operating in offline mode') {
+    const accounts = getRegisteredAccounts();
+    const found = accounts.find((a) => a.email === cleanGmail || a.username === cleanGmail);
+    if (!found) {
+      return { error: 'Account not found. Please create an account first.' };
+    }
+    if (found.passwordHash !== passwordHash) {
+      return { error: 'Incorrect password. Please try again.' };
+    }
+    const profile: UserProfile = {
+      id: found.id,
+      username: found.username,
+      displayName: found.displayName,
+      email: found.email,
+      avatar: found.avatar,
+    };
+    saveUser(profile);
+    return { user: profile };
   }
 
-  const profile: UserProfile = {
-    id: found.id,
-    username: found.username,
-    displayName: found.displayName,
-    email: found.email,
-    avatar: found.avatar,
-  };
-
-  saveUser(profile);
-  syncAccountToCloud(found);
-  return { user: profile };
+  return { error: dbResult.error || 'Authentication failed' };
 }
 
-/**
- * Registers or authenticates a user via Google Authentication (Gmail + Secret Code OTP)
- */
-export function registerOrLoginGoogleAccount(
+// ─────────────────────────────────────────────────────────
+// GOOGLE AUTH — Register or login via Google OTP-verified Gmail
+// ─────────────────────────────────────────────────────────
+
+export async function registerOrLoginGoogleAccount(
   gmailInput: string,
   displayNameInput?: string,
-): { user: UserProfile; error?: string } {
+): Promise<{ user: UserProfile; error?: string }> {
   if (typeof window === 'undefined') {
     return { user: DEFAULT_GUEST_USER, error: 'Browser environment required' };
   }
 
   const cleanGmail = gmailInput.trim().toLowerCase();
   if (!cleanGmail || !/^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(cleanGmail)) {
-    return { user: DEFAULT_GUEST_USER, error: 'Invalid Gmail address. Must be a valid @gmail.com email.' };
+    return { user: DEFAULT_GUEST_USER, error: 'Invalid Gmail address.' };
   }
 
-  const accounts = getRegisteredAccounts();
-  let found = accounts.find((a) => a.email === cleanGmail || a.username === cleanGmail);
+  const userKey = cleanGmail.replace(/[^a-zA-Z0-9]/g, '_');
 
-  if (!found) {
-    const userKey = cleanGmail.replace(/[^a-zA-Z0-9]/g, '_');
-    found = {
+  // 1. Register or login in Supabase DB
+  const dbResult = await callAuthAPI({
+    action: 'google_auth',
+    id: `user_${userKey}`,
+    email: cleanGmail,
+    displayName: displayNameInput?.trim() || cleanGmail.split('@')[0],
+    passwordHash: btoa('GoogleAuthVerifiedSecret'),
+    createdAt: new Date().toISOString(),
+  });
+
+  let account: any;
+  if (dbResult.success && dbResult.account) {
+    account = dbResult.account;
+  } else {
+    // Fallback to local
+    account = {
       id: `user_${userKey}`,
       username: cleanGmail,
       displayName: displayNameInput?.trim() || cleanGmail.split('@')[0],
@@ -193,27 +262,38 @@ export function registerOrLoginGoogleAccount(
       passwordHash: btoa('GoogleAuthVerifiedSecret'),
       createdAt: new Date().toISOString(),
     };
-    accounts.push(found);
-    localStorage.setItem(ACCOUNTS_DB_KEY, JSON.stringify(accounts));
   }
 
-  syncAccountToCloud(found);
+  // 2. Save to local cache
+  saveAccountToLocalCache({
+    id: account.id,
+    username: account.username,
+    displayName: account.displayName,
+    email: account.email,
+    passwordHash: account.passwordHash,
+    createdAt: account.createdAt,
+  });
 
   const profile: UserProfile = {
-    id: found.id,
-    username: found.username,
-    displayName: found.displayName,
-    email: found.email,
-    avatar: found.avatar,
+    id: account.id,
+    username: account.username,
+    displayName: account.displayName,
+    email: account.email,
+    avatar: account.avatar,
   };
 
   saveUser(profile);
+
+  // Load cloud threads
+  loadCloudThreadsToLocal(account.id);
+
   return { user: profile };
 }
 
-/**
- * Gets active signed-in user session or returns null
- */
+// ─────────────────────────────────────────────────────────
+// SESSION MANAGEMENT
+// ─────────────────────────────────────────────────────────
+
 export function getSavedUser(): UserProfile | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -225,25 +305,20 @@ export function getSavedUser(): UserProfile | null {
   }
 }
 
-/**
- * Saves active user session to local storage
- */
 export function saveUser(user: UserProfile): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(USER_SESSION_KEY, JSON.stringify(user));
 }
 
-/**
- * Removes active user session (sign out)
- */
 export function removeUser(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(USER_SESSION_KEY);
 }
 
-/**
- * Gets chat threads for a given user ID
- */
+// ─────────────────────────────────────────────────────────
+// CHAT THREADS — Local cache + Supabase DB sync
+// ─────────────────────────────────────────────────────────
+
 export function getUserThreads(userId: string): ChatThread[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -256,8 +331,39 @@ export function getUserThreads(userId: string): ChatThread[] {
 }
 
 /**
- * Saves or updates a chat thread for a user
+ * Load threads from Supabase cloud DB into local cache (called on login)
  */
+export async function loadCloudThreadsToLocal(userId: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const dbResult = await callAuthAPI({ action: 'get_threads', userId });
+    if (dbResult.success && dbResult.threads && dbResult.threads.length > 0) {
+      const localThreads = getUserThreads(userId);
+      const localIds = new Set(localThreads.map((t) => t.id));
+
+      let merged = [...localThreads];
+      dbResult.threads.forEach((cloudThread: ChatThread) => {
+        if (!localIds.has(cloudThread.id)) {
+          merged.push(cloudThread);
+        } else {
+          // Cloud version may be newer — update local
+          const idx = merged.findIndex((t) => t.id === cloudThread.id);
+          if (idx >= 0 && new Date(cloudThread.updatedAt) > new Date(merged[idx].updatedAt)) {
+            merged[idx] = cloudThread;
+          }
+        }
+      });
+
+      // Sort by updatedAt descending
+      merged.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      localStorage.setItem(`${THREADS_STORAGE_KEY_PREFIX}${userId}`, JSON.stringify(merged));
+    }
+  } catch (err) {
+    console.error('Failed to load cloud threads:', err);
+  }
+}
+
 export function saveUserThread(userId: string, thread: ChatThread): void {
   if (typeof window === 'undefined') return;
   try {
@@ -272,15 +378,14 @@ export function saveUserThread(userId: string, thread: ChatThread): void {
       `${THREADS_STORAGE_KEY_PREFIX}${userId}`,
       JSON.stringify(threads),
     );
-    syncThreadToCloud(userId, thread);
+
+    // Sync to Supabase DB (source of truth backup)
+    callAuthAPI({ action: 'save_thread', userId, thread }).catch(() => {});
   } catch (error) {
     console.error('Error saving thread:', error);
   }
 }
 
-/**
- * Deletes a chat thread for a user
- */
 export function deleteUserThread(userId: string, threadId: string): void {
   if (typeof window === 'undefined') return;
   try {
@@ -289,14 +394,17 @@ export function deleteUserThread(userId: string, threadId: string): void {
       `${THREADS_STORAGE_KEY_PREFIX}${userId}`,
       JSON.stringify(threads),
     );
+    // Also delete from cloud DB
+    callAuthAPI({ action: 'delete_thread', threadId }).catch(() => {});
   } catch (error) {
     console.error('Error deleting thread:', error);
   }
 }
 
-/**
- * Generates a cheerful greeting based on time of day and user profile
- */
+// ─────────────────────────────────────────────────────────
+// GREETING
+// ─────────────────────────────────────────────────────────
+
 export function getCheerfulGreeting(displayName?: string, isGuest?: boolean): string {
   const hour = new Date().getHours();
   let timeOfDay = 'day';
@@ -324,28 +432,25 @@ export function getCheerfulGreeting(displayName?: string, isGuest?: boolean): st
   return `Good ${timeOfDay}, ${firstName}! ${emoji} Ready to extract intelligence from your documents?`;
 }
 
-/**
- * Admin interface structure
- */
+// ─────────────────────────────────────────────────────────
+// ADMIN DATA — Fetches from Supabase DB (survives redeployments)
+// ─────────────────────────────────────────────────────────
+
 export interface AdminUserData {
   account: UserAccount;
   plainPassword: string;
   threads: ChatThread[];
 }
 
-/**
- * Gets all user accounts, decoded passwords, and complete chat histories for Admin inspection
- */
 export function getAllAdminData(): AdminUserData[] {
   if (typeof window === 'undefined') return [];
 
   const accountsMap = new Map<string, UserAccount>();
 
-  // 1. Load registered user accounts
+  // Load from local cache
   const registered = getRegisteredAccounts();
   registered.forEach((acc) => accountsMap.set(acc.id, acc));
 
-  // 2. Scan localStorage for any user thread records (Google sign in, custom logins, etc.)
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key && key.startsWith(THREADS_STORAGE_KEY_PREFIX)) {
@@ -364,7 +469,6 @@ export function getAllAdminData(): AdminUserData[] {
     }
   }
 
-  // 3. Build complete Admin data list
   const result: AdminUserData[] = [];
   accountsMap.forEach((acc) => {
     let plainPassword = acc.passwordHash;
@@ -380,4 +484,55 @@ export function getAllAdminData(): AdminUserData[] {
   });
 
   return result;
+}
+
+/**
+ * Fetch ALL admin data from Supabase cloud DB (survives redeployments!)
+ */
+export async function getAllAdminDataFromCloud(): Promise<AdminUserData[]> {
+  try {
+    const dbResult = await callAuthAPI({ action: 'get_all_admin' });
+    if (!dbResult.success) return [];
+
+    const result: AdminUserData[] = [];
+    const accounts = dbResult.accounts || [];
+    const chats = dbResult.chats || [];
+
+    accounts.forEach((acc: any) => {
+      let plainPassword = acc.password_hash;
+      try {
+        plainPassword = atob(acc.password_hash);
+      } catch {}
+
+      const userChats = chats
+        .filter((c: any) => c.user_id === acc.id)
+        .map((c: any) => ({
+          id: c.id,
+          title: c.title,
+          messages: c.messages,
+          fileNames: c.file_names || [],
+          createdAt: c.created_at,
+          updatedAt: c.updated_at,
+        }));
+
+      result.push({
+        account: {
+          id: acc.id,
+          username: acc.username,
+          displayName: acc.display_name,
+          email: acc.email,
+          avatar: acc.avatar,
+          passwordHash: acc.password_hash,
+          createdAt: acc.created_at,
+        },
+        plainPassword,
+        threads: userChats,
+      });
+    });
+
+    return result;
+  } catch (err) {
+    console.error('Failed to fetch cloud admin data:', err);
+    return [];
+  }
 }

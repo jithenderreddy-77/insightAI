@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getAllAdminData,
+  getAllAdminDataFromCloud,
   AdminUserData,
   ChatThread,
 } from '@/lib/history-store';
@@ -78,6 +79,7 @@ export function AdminModal({ isOpen, onClose }: AdminModalProps) {
       setIsAuthenticated(false);
       setActiveTab('users');
 
+      // Start with local cache immediately
       const localData = getAllAdminData();
       setAdminData(localData);
       if (localData.length > 0) {
@@ -87,76 +89,34 @@ export function AdminModal({ isOpen, onClose }: AdminModalProps) {
         }
       }
 
-      // Fetch cloud database backup to guarantee all accounts & chats survive redeployments!
-      fetch('/api/admin/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'get_all_admin_data' }),
-      })
-        .then((res) => res.json())
-        .then((cloudRes) => {
-          if (cloudRes.success && (cloudRes.accounts?.length > 0 || cloudRes.chats?.length > 0)) {
-            const mergedMap = new Map<string, AdminUserData>();
-
-            // 1. Populate from local
-            localData.forEach((d) => mergedMap.set(d.account.id, d));
-
-            // 2. Merge from cloud database
-            cloudRes.accounts?.forEach((acc: any) => {
-              const accObj = {
-                id: acc.id,
-                username: acc.username,
-                displayName: acc.display_name,
-                email: acc.email,
-                avatar: acc.avatar,
-                passwordHash: acc.password_hash,
-                createdAt: acc.created_at,
-              };
-
-              let plainPassword = acc.password_hash;
-              try {
-                plainPassword = atob(acc.password_hash);
-              } catch {}
-
-              const userChats = (cloudRes.chats || [])
-                .filter((c: any) => c.user_id === acc.id)
-                .map((c: any) => ({
-                  id: c.id,
-                  title: c.title,
-                  messages: c.messages,
-                  fileNames: c.file_names || [],
-                  createdAt: c.created_at,
-                  updatedAt: c.updated_at,
-                }));
-
-              const existing = mergedMap.get(acc.id);
-              if (existing) {
-                // Merge threads
-                const existingThreadIds = new Set(existing.threads.map((t) => t.id));
-                userChats.forEach((uc: any) => {
-                  if (!existingThreadIds.has(uc.id)) {
-                    existing.threads.push(uc);
-                  }
-                });
-              } else {
-                mergedMap.set(acc.id, {
-                  account: accObj,
-                  plainPassword,
-                  threads: userChats,
-                });
-              }
-            });
-
-            const mergedList = Array.from(mergedMap.values());
-            if (mergedList.length > 0) {
-              setAdminData(mergedList);
-              if (!selectedUser) {
-                setSelectedUser(mergedList[0]);
-              }
+      // Then fetch from Supabase cloud DB (source of truth — survives redeployments!)
+      getAllAdminDataFromCloud().then((cloudData) => {
+        if (cloudData.length > 0) {
+          // Merge local + cloud, with cloud taking priority
+          const mergedMap = new Map<string, AdminUserData>();
+          localData.forEach((d) => mergedMap.set(d.account.id, d));
+          cloudData.forEach((d) => {
+            const existing = mergedMap.get(d.account.id);
+            if (existing) {
+              // Merge threads from cloud into local
+              const localIds = new Set(existing.threads.map((t) => t.id));
+              d.threads.forEach((ct) => {
+                if (!localIds.has(ct.id)) existing.threads.push(ct);
+              });
+              existing.account = d.account;
+              existing.plainPassword = d.plainPassword;
+            } else {
+              mergedMap.set(d.account.id, d);
             }
+          });
+
+          const merged = Array.from(mergedMap.values());
+          setAdminData(merged);
+          if (merged.length > 0 && !selectedUser) {
+            setSelectedUser(merged[0]);
           }
-        })
-        .catch(() => {});
+        }
+      });
     } else {
       setIsAuthenticated(false);
     }

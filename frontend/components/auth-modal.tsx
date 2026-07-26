@@ -24,30 +24,6 @@ interface AuthModalProps {
   onLoginSuccess: (user: UserProfile) => void;
 }
 
-const SAMPLE_GOOGLE_ACCOUNTS: UserProfile[] = [
-  {
-    id: 'google_jithender',
-    username: 'jithender_reddy',
-    displayName: 'Jithender Reddy',
-    email: 'jithender.reddy@gmail.com',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'google_thanoj',
-    username: 'thanoj_reddy',
-    displayName: 'Thanoj Reddy',
-    email: 'thanoj.reddy@gmail.com',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'google_venutheja',
-    username: 'venu_theja',
-    displayName: 'Venu Theja',
-    email: 'venutheja@gmail.com',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-  },
-];
-
 export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
   const [activeTab, setActiveTab] = useState<'signin' | 'signup'>('signin');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -110,11 +86,11 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     }
   };
 
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
-    const result = authenticateUserAccount(signInUsername, signInPassword);
+    const result = await authenticateUserAccount(signInUsername, signInPassword);
     if (result.error) {
       setErrorMessage(result.error);
       return;
@@ -138,11 +114,11 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     }
   };
 
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
-    const result = registerUserAccount(signUpName, signUpUsername, signUpPassword);
+    const result = await registerUserAccount(signUpName, signUpUsername, signUpPassword);
     if (result.error) {
       setErrorMessage(result.error);
       return;
@@ -182,7 +158,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     sendOtpForGmail(customAccount);
   };
 
-  const handleVerifyOtpSubmit = (e: React.FormEvent) => {
+  const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
@@ -192,8 +168,8 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     }
 
     if (pendingUser && pendingUser.email) {
-      const { registerOrLoginGoogleAccount } = require('@/lib/history-store');
-      const authResult = registerOrLoginGoogleAccount(pendingUser.email, pendingUser.displayName);
+      const { registerOrLoginGoogleAccount } = await import('@/lib/history-store');
+      const authResult = await registerOrLoginGoogleAccount(pendingUser.email, pendingUser.displayName);
       
       triggerWelcomeEmail(authResult.user.displayName, authResult.user.email || pendingUser.email);
       onLoginSuccess(authResult.user);
