@@ -95,70 +95,92 @@ export async function POST(req: Request) {
       .join('\n\n---\n\n');
 
     const systemPrompt = context
-      ? `You are an expert AI document assistant. Your primary task is to answer the user's question with absolute accuracy, using ONLY the facts explicitly provided in the DOCUMENT CONTEXT below.
+      ? `You are a world-class AI document analyst that produces exceptionally rich, publication-quality responses. Answer the user's question with absolute accuracy using ONLY facts from the DOCUMENT CONTEXT below.
 
-STRICT INSTRUCTIONS:
-1. Provide a direct, highly accurate answer based ONLY on the provided DOCUMENT CONTEXT.
-2. RICH FORMATTING:
-   - TABLES: Whenever presenting structured, tabular, or comparative data (numbers, specs, lists, features), ALWAYS present them using a clean Markdown Table (e.g., | Feature | Description |).
-   - ADVANCED FLOWCHARTS & DIAGRAMS: Whenever the user asks for a flowchart, diagram, process, workflow, architecture, or visual representation, you MUST generate a well-structured Mermaid diagram inside a \`\`\`mermaid code block. Follow these rules EXACTLY:
-     * Start with \`graph TD\` or \`flowchart TD\`.
-     * Use subgraphs to group related steps: \`subgraph Phase_Name["Phase Name"]\`.
-     * Use decision diamonds for branching: \`C{"Is data valid?"}\`.
-     * Use parallel branches: \`C -- Yes --> D\` and \`C -- No --> E\`.
-     * CRITICAL: Do NOT use emoji characters inside Mermaid node labels. Use plain text only.
-     * CRITICAL: Always wrap labels containing parentheses, colons, or commas in double quotes.
-     * Extract real entity names, component names, and steps from the document content.
-     * Example of a correct diagram:
-       \`\`\`mermaid
-       graph TD
-         subgraph Input["Input Phase"]
-           A["User uploads document"] --> B["Parse text content"]
-         end
-         subgraph Processing["Analysis Phase"]
-           B --> C{"Content type?"}
-           C -- PDF --> D["Extract PDF text"]
-           C -- Image --> E["Run OCR extraction"]
-         end
-         subgraph Output["Results"]
-           D --> F["Generate answer"]
-           E --> F
-         end
-       \`\`\`
-3. Do NOT invent, assume, or extrapolate facts outside the provided document text.
-4. If the question cannot be answered using the provided DOCUMENT CONTEXT, respond: "Based on the uploaded document, this information is not mentioned in the text."
+RESPONSE FORMAT RULES:
+1. ANSWER: Provide a clear, comprehensive answer based ONLY on the DOCUMENT CONTEXT.
+2. MARKDOWN TABLES: For any structured, comparative, or multi-attribute data, produce a well-formatted Markdown table with headers and proper alignment.
+3. MERMAID DIAGRAMS: When the user requests a flowchart, diagram, process map, architecture, workflow, pipeline, overview, or any visual representation, you MUST produce a professional-grade Mermaid diagram. Follow ALL these rules:
+
+   MERMAID SYNTAX RULES (MANDATORY):
+   a) Start with \`graph TD\` (top-down) or \`graph LR\` (left-right).
+   b) Use \`subgraph ID["Readable Title"]\` to group logical phases. End each with \`end\`.
+   c) Use \`NodeID["Label"]\` for process steps, \`NodeID{"Label"}\` for decisions, \`NodeID(["Label"])\` for start/end terminals, \`NodeID[["Label"]]\` for subroutines.
+   d) Connect nodes with \`-->\` arrows. Use labeled edges like \`A -- "label text" --> B\`.
+   e) For decisions, create branches: \`D -- "Yes" --> E\` and \`D -- "No" --> F\`.
+   f) Use parallel paths, loops, and feedback arrows where the document describes iterative or branching processes.
+   g) Style with \`classDef\` for color-coded nodes: \`classDef primary fill:#4f46e5,stroke:#3730a3,color:#fff\`.
+   h) NEVER use emoji or unicode characters inside node labels — plain ASCII text only.
+   i) Always wrap labels containing special characters (parentheses, colons, ampersands, commas) in double quotes.
+   j) Extract REAL entity names, system components, phases, roles, and data flows from the document text. DO NOT use generic placeholder labels.
+   k) Aim for 10-25 nodes across 3-5 subgraphs for a comprehensive, detailed diagram.
+   l) Close every \`subgraph\` with \`end\`.
+   m) Apply classDef styles at the end with \`class NodeID className\`.
+
+   EXAMPLE of a correct, high-quality diagram:
+   \`\`\`mermaid
+   graph TD
+     subgraph Input_Phase["Data Collection"]
+       A(["Start"]) --> B["Receive user query"]
+       B --> C["Load uploaded document"]
+     end
+     subgraph Analysis_Phase["Intelligent Processing"]
+       C --> D{"Document type?"}
+       D -- "PDF" --> E["Extract text via parser"]
+       D -- "Image" --> F["Run OCR engine"]
+       D -- "Spreadsheet" --> G["Parse tabular data"]
+       E --> H["Chunk text into segments"]
+       F --> H
+       G --> H
+     end
+     subgraph AI_Phase["AI Reasoning"]
+       H --> I["Generate vector embeddings"]
+       I --> J["Semantic similarity search"]
+       J --> K{"Relevant match found?"}
+       K -- "Yes" --> L["Synthesize AI answer"]
+       K -- "No" --> M["Request clarification"]
+     end
+     subgraph Output_Phase["Response Delivery"]
+       L --> N["Format with tables and diagrams"]
+       M --> N
+       N --> O(["End"])
+     end
+     classDef primary fill:#4f46e5,stroke:#3730a3,color:#fff
+     classDef decision fill:#f59e0b,stroke:#d97706,color:#000
+     classDef terminal fill:#10b981,stroke:#059669,color:#fff
+     class B,C,E,F,G,H,I,J,L,M,N primary
+     class D,K decision
+     class A,O terminal
+   \`\`\`
+
+4. Do NOT invent or extrapolate facts outside the DOCUMENT CONTEXT.
+5. If unanswerable from context, state: "Based on the uploaded document, this information is not mentioned in the text."
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a helpful AI assistant. Answer the user's question clearly, concisely, and accurately. When asked for diagrams or flowcharts, generate advanced Mermaid diagrams inside \`\`\`mermaid code blocks with subgraphs and decision branches. Do NOT use emoji in Mermaid node labels.`;
+      : `You are a world-class AI assistant. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams with subgraphs, decision diamonds, styled classDef nodes, labeled edges, and 10+ nodes. Do NOT use emoji in Mermaid labels. Always wrap special characters in quotes.`;
 
-    // 2) Get AI Completion Stream with Automatic Offline Standalone Failover
+    // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
-    // Try Cloud API GPU if internet is active
-    if (!useLocalOffline && (nvidiaApiKey || openaiApiKey)) {
+    // Try OpenAI GPT-4o FIRST (best diagram quality)
+    if (!useLocalOffline && openaiApiKey) {
       try {
-        const apiUrl = nvidiaApiKey
-          ? 'https://integrate.api.nvidia.com/v1/chat/completions'
-          : 'https://api.openai.com/v1/chat/completions';
-        const model = nvidiaApiKey ? 'meta/llama-3.1-8b-instruct' : 'gpt-4o-mini';
-        const apiKey = nvidiaApiKey || openaiApiKey;
-
-        const res = await fetch(apiUrl, {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${apiKey}`,
+            'Authorization': `Bearer ${openaiApiKey}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model,
+            model: 'gpt-4o',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: message },
             ],
             stream: true,
-            temperature: 0.1,
-            max_tokens: 3000,
+            temperature: 0.2,
+            max_tokens: 4096,
           }),
         });
 
@@ -166,7 +188,36 @@ ${context}`
           aiResponseStream = res.body;
         }
       } catch (networkError) {
-        console.log('[OFFLINE FAILOVER] Cloud API unreachable (No internet). Switching to Built-in Standalone Offline Intelligence Engine...');
+        console.log('[GPT-4o] OpenAI unreachable, falling back to NVIDIA...');
+      }
+    }
+
+    // Fallback to NVIDIA if OpenAI fails
+    if (!aiResponseStream && !useLocalOffline && nvidiaApiKey) {
+      try {
+        const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${nvidiaApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'meta/llama-3.1-8b-instruct',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: message },
+            ],
+            stream: true,
+            temperature: 0.2,
+            max_tokens: 4096,
+          }),
+        });
+
+        if (res.ok && res.body) {
+          aiResponseStream = res.body;
+        }
+      } catch (networkError) {
+        console.log('[NVIDIA] Cloud API unreachable. Switching to Offline Engine...');
       }
     }
 
@@ -323,7 +374,7 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   const extractedSentences: string[] = [];
   bestPassages.forEach((p) => {
     const sentences = p.text.split(/(?<=[.!?])\s+/);
-    sentences.forEach((s) => {
+    sentences.forEach((s: string) => {
       const sLower = s.toLowerCase();
       if (queryTerms.some((term) => sLower.includes(term))) {
         const cleanS = s.replace(/\s+/g, ' ').trim();
