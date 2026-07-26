@@ -1,5 +1,4 @@
 import { Client } from '@langchain/langgraph-sdk';
-import { graph } from './src/retrieval_graph/graph.js';
 import dotenv from 'dotenv';
 
 // Load environment variables from .env file

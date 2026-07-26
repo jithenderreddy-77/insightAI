@@ -6,8 +6,15 @@ import { Toaster } from "@/components/ui/toaster"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Learning LangChain Book Chatbot Demo",
-  description: "A chatbot demo based on Learning LangChain (O'Reilly)",
+  title: "Insight — Extract Intelligence from PDFs",
+  description: "Upload PDFs and extract intelligence with AI. Fast, accurate document Q&A powered by LangChain and Supabase.",
+  manifest: "/manifest.json",
+  themeColor: "#4f46e5",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Insight AI",
+  },
 }
 
 export default function RootLayout({
@@ -17,6 +24,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="apple-touch-icon" href="/title.png" />
+        <meta name="theme-color" content="#4f46e5" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
       <body className={GeistSans.className}>
         {children}
         <Toaster />
@@ -24,7 +37,3 @@ export default function RootLayout({
     </html>
   )
 }
-
-
-
-import './globals.css'

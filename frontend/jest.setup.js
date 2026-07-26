@@ -18,6 +18,8 @@ global.Response = Response;
 // Mock environment variables
 process.env.NEXT_PUBLIC_LANGGRAPH_API_URL = 'http://localhost:2024';
 process.env.LANGCHAIN_API_KEY = 'test-key';
+process.env.LANGGRAPH_INGESTION_ASSISTANT_ID = 'ingestion_graph';
+process.env.LANGGRAPH_RETRIEVAL_ASSISTANT_ID = 'retrieval_graph';
 
 // Mock the performance API
 global.performance = {

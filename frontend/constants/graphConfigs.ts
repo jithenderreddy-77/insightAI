@@ -4,7 +4,7 @@ type StreamConfigurables = AgentConfiguration;
 type IndexConfigurables = IndexConfiguration;
 
 export const retrievalAssistantStreamConfig: StreamConfigurables = {
-  queryModel: 'openai/gpt-4o-mini',
+  queryModel: 'nvidia/meta/llama-3.1-8b-instruct',
   retrieverProvider: 'supabase',
   k: 5,
 };

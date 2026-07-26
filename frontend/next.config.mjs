@@ -17,6 +17,8 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
+    // pdf-parse uses dynamic require() which webpack can't bundle
+    serverComponentsExternalPackages: ['pdf-parse'],
     webpackBuildWorker: true,
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,

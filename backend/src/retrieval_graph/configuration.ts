@@ -34,6 +34,6 @@ export function ensureAgentConfiguration(
   const baseConfig = ensureBaseConfiguration(config);
   return {
     ...baseConfig,
-    queryModel: configurable.queryModel || 'openai/gpt-4o',
+    queryModel: configurable.queryModel || 'nvidia/meta/llama-3.1-8b-instruct',
   };
 }
