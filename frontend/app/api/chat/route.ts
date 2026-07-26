@@ -101,13 +101,17 @@ STRICT INSTRUCTIONS:
 1. Provide a direct, highly accurate answer based ONLY on the provided DOCUMENT CONTEXT.
 2. RICH FORMATTING:
    - TABLES: Whenever presenting structured, tabular, or comparative data (numbers, specs, lists, features), ALWAYS present them using a clean Markdown Table (e.g., | Feature | Description |).
-   - FLOWCHARTS & DIAGRAMS: Whenever describing a workflow, system architecture, step-by-step process, or pipeline, ALWAYS include a Mermaid flowchart diagram inside a \`\`\`mermaid code block (e.g. \`\`\`mermaid\ngraph TD\n  A[Input] --> B[Process]\n\`\`\`).
+   - ADVANCED FLOWCHARTS & DIAGRAMS: Whenever asked for a flowchart, process, workflow, architecture, or diagram, ALWAYS generate an ADVANCED, MULTI-BRANCH Mermaid diagram directly derived from the DOCUMENT CONTEXT inside a \`\`\`mermaid code block.
+     * Use subgraphs (e.g., \`subgraph Input_Phase["📥 Input Phase"]\`).
+     * Use decision diamonds (e.g., \`C{"🔍 Verification Check"}\`).
+     * Use parallel branches (e.g., \`C -- Yes --> D\` and \`C -- No --> E\`).
+     * Use specific entity names, component labels, and extracted facts from the document text.
 3. Do NOT invent, assume, or extrapolate facts outside the provided document text.
 4. If the question cannot be answered using the provided DOCUMENT CONTEXT, respond: "Based on the uploaded document, this information is not mentioned in the text."
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a helpful AI assistant. Answer the user's question clearly, concisely, and accurately using Markdown Tables and Mermaid Flowcharts where appropriate.`;
+      : `You are a helpful AI assistant. Answer the user's question clearly, concisely, and accurately using Markdown Tables and Advanced Mermaid Flowcharts (with subgraphs and decision branches) where appropriate.`;
 
     // 2) Get AI Completion Stream with Automatic Offline Standalone Failover
     let aiResponseStream: ReadableStream | null = null;
@@ -366,13 +370,32 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     output += `\n`;
   }
 
-  // 3. Interactive Mermaid SVG Flowchart
+  // 3. Advanced Document-Specific Interactive Mermaid Flowchart
   if (wantsFlowchart) {
-    output += `### 🔄 Workflow Process Diagram\n\n`;
+    const cleanSource = primarySource.replace(/[^a-zA-Z0-9._\s-]/g, '');
+    const topicList = extractedSentences
+      .map((s) => s.split(':')[0].trim().slice(0, 32).replace(/[^a-zA-Z0-9\s]/g, ''))
+      .filter((t) => t.length > 3);
+
+    const step1 = topicList[0] || 'Document Text Extraction';
+    const step2 = topicList[1] || 'Semantic Fact Analysis';
+    const step3 = topicList[2] || 'Data Verification Pipeline';
+    const step4 = topicList[3] || 'Synthesized Document Insights';
+
+    output += `### 🔄 Advanced Document Workflow & Architecture Diagram\n\n`;
     output += `\`\`\`mermaid\ngraph TD\n`;
-    output += `  A["📁 ${primarySource.replace(/"/g, '')}"] --> B["🔍 Extract Document Text"]\n`;
-    output += `  B --> C["⚡ Neural RAG Analysis"]\n`;
-    output += `  C --> D["📊 Answer & Flowchart Output"]\n`;
+    output += `  subgraph Source_Layer["📁 Document Source Layer"]\n`;
+    output += `    A["📄 ${cleanSource}"] --> B["⚡ ${step1}"]\n`;
+    output += `  end\n\n`;
+    output += `  subgraph Processing_Layer["⚙️ Intelligence & Verification"]\n`;
+    output += `    B --> C{"🔍 Match Relevant Data?"}\n`;
+    output += `    C -- High Confidence --> D["📊 ${step2}"]\n`;
+    output += `    C -- Deep Analysis --> E["📝 ${step3}"]\n`;
+    output += `  end\n\n`;
+    output += `  subgraph Output_Layer["🚀 Synthesized Output"]\n`;
+    output += `    D --> F["🎯 ${step4}"]\n`;
+    output += `    E --> F\n`;
+    output += `  end\n`;
     output += `\`\`\`\n\n`;
   }
 
