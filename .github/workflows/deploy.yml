@@ -1,5 +1,5 @@
 # .github/workflows/deploy.yml
-# GitHub Actions CI/CD Pipeline for Building, Verifying, and Deploying
+# GitHub Actions CI/CD Pipeline for Building and Verifying Next.js Application
 
 name: CI/CD Pipeline & Build Verification
 
@@ -38,22 +38,3 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://dummy.supabase.co' }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'dummy-key' }}
-
-  deploy-to-vercel:
-    name: Deploy to Vercel Production
-    needs: build-and-verify
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.VERCEL_TOKEN != ''
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
-          working-directory: ./frontend
