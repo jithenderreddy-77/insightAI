@@ -382,42 +382,47 @@ async function getQueryEmbedding(
   nvidiaApiKey?: string,
   openaiApiKey?: string,
 ): Promise<number[]> {
-  if (useLocalOffline) {
-    try {
-      const res = await fetch('http://localhost:11434/api/embeddings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'nomic-embed-text', prompt: text }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.embedding;
-      }
-    } catch {}
-  }
-
-  if (nvidiaApiKey && !useLocalOffline) {
-    try {
-      const res = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${nvidiaApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'nvidia/nv-embedqa-e5-v5',
-          input: [text],
-          input_type: 'query',
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.data[0].embedding;
-      }
-    } catch {
-      console.log('[OFFLINE NOTICE] Cloud embedding unreachable.');
+  const fetchEmbeddingPromise = (async () => {
+    if (useLocalOffline) {
+      try {
+        const res = await fetch('http://localhost:11434/api/embeddings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'nomic-embed-text', prompt: text }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.embedding;
+        }
+      } catch {}
     }
-  }
 
-  return [];
+    if (nvidiaApiKey && !useLocalOffline) {
+      try {
+        const res = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${nvidiaApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'nvidia/nv-embedqa-e5-v5',
+            input: [text],
+            input_type: 'query',
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.data[0].embedding;
+        }
+      } catch {
+        console.log('[OFFLINE NOTICE] Cloud embedding unreachable.');
+      }
+    }
+
+    return [];
+  })();
+
+  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 1000));
+  return Promise.race([fetchEmbeddingPromise, timeoutPromise]);
 }

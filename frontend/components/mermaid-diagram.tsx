@@ -11,33 +11,55 @@ let idCounter = 0;
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>('');
-  const [hasError, setHasError] = useState<boolean>(false);
+  const [isValid, setIsValid] = useState<boolean>(false);
 
   useEffect(() => {
     let isMounted = true;
+
+    const cleanDOMErrorNodes = () => {
+      if (typeof document !== 'undefined') {
+        const errorNodes = document.querySelectorAll('.error-icon, [id^="dmermaid"], div:contains("Syntax error")');
+        errorNodes.forEach((node) => node.remove());
+      }
+    };
+
     const renderDiagram = async () => {
       try {
         const mermaid = (await import('mermaid')).default;
+        
         mermaid.initialize({
           startOnLoad: false,
           theme: 'default',
           securityLevel: 'loose',
           fontFamily: 'inherit',
+          suppressErrorRendering: true,
         });
 
-        const uniqueId = `mermaid_chart_${Date.now()}_${idCounter++}`;
         const cleanChart = chart.trim();
+        if (!cleanChart || cleanChart.length < 10) {
+          return;
+        }
 
+        // Validate syntax with parse() before render() to prevent error injection during streaming
+        const valid = await mermaid.parse(cleanChart).catch(() => false);
+        if (!valid) {
+          cleanDOMErrorNodes();
+          if (isMounted) setIsValid(false);
+          return;
+        }
+
+        const uniqueId = `mermaid_chart_${Date.now()}_${idCounter++}`;
         const { svg } = await mermaid.render(uniqueId, cleanChart);
-        if (isMounted) {
+        
+        cleanDOMErrorNodes();
+
+        if (isMounted && svg) {
           setSvgContent(svg);
-          setHasError(false);
+          setIsValid(true);
         }
       } catch (err) {
-        console.error('Mermaid render error:', err);
-        if (isMounted) {
-          setHasError(true);
-        }
+        cleanDOMErrorNodes();
+        if (isMounted) setIsValid(false);
       }
     };
 
@@ -47,16 +69,12 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
     return () => {
       isMounted = false;
+      cleanDOMErrorNodes();
     };
   }, [chart]);
 
-  if (hasError || !svgContent) {
-    return (
-      <div className="my-3 p-3 rounded-xl bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto border border-slate-800">
-        <div className="text-[10px] uppercase font-bold text-indigo-400 mb-1">Flowchart Code</div>
-        <pre>{chart}</pre>
-      </div>
-    );
+  if (!isValid || !svgContent) {
+    return null; // Gracefully hide partial/incomplete streaming diagrams instead of showing bomb icons or syntax error banners
   }
 
   return (

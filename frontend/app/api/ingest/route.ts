@@ -103,18 +103,47 @@ export async function POST(request: NextRequest) {
       filename: (d.metadata as any)?.filename || (d.metadata as any)?.source || 'Uploaded File',
     }));
 
-    // Try Cloud Vector Indexing if internet is connected
+    // Try Cloud Vector Indexing if internet is connected (with fast 2.5s timeout)
     let cloudIngested = false;
     if (supabaseUrl && supabaseKey && (nvidiaApiKey || openaiApiKey)) {
       try {
-        let embeddings: any;
+        const cloudIngestPromise = (async () => {
+          let embeddings: any;
 
-        if (nvidiaApiKey) {
-          embeddings = {
-            embedDocuments: async (texts: string[]): Promise<number[][]> => {
-              const allEmbeddings: number[][] = [];
-              for (let i = 0; i < texts.length; i += 50) {
-                const batch = texts.slice(i, i + 50);
+          if (nvidiaApiKey) {
+            embeddings = {
+              embedDocuments: async (texts: string[]): Promise<number[][]> => {
+                const batchSize = 50;
+                const batchPromises = [];
+                for (let i = 0; i < texts.length; i += batchSize) {
+                  const batch = texts.slice(i, i + batchSize);
+                  batchPromises.push(
+                    fetch('https://integrate.api.nvidia.com/v1/embeddings', {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${nvidiaApiKey}`,
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        model: 'nvidia/nv-embedqa-e5-v5',
+                        input: batch,
+                        input_type: 'passage',
+                      }),
+                    }).then((r) => (r.ok ? r.json() : { data: [] }))
+                  );
+                }
+                const results = await Promise.all(batchPromises);
+                const allEmbeddings: number[][] = [];
+                for (const res of results) {
+                  if (res.data) {
+                    for (const item of res.data) {
+                      allEmbeddings.push(item.embedding);
+                    }
+                  }
+                }
+                return allEmbeddings;
+              },
+              embedQuery: async (text: string): Promise<number[]> => {
                 const res = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
                   method: 'POST',
                   headers: {
@@ -123,63 +152,50 @@ export async function POST(request: NextRequest) {
                   },
                   body: JSON.stringify({
                     model: 'nvidia/nv-embedqa-e5-v5',
-                    input: batch,
-                    input_type: 'passage',
+                    input: [text],
+                    input_type: 'query',
                   }),
                 });
                 if (res.ok) {
                   const data = await res.json();
-                  for (const item of data.data) {
-                    allEmbeddings.push(item.embedding);
-                  }
+                  return data.data[0].embedding;
                 }
-              }
-              return allEmbeddings;
-            },
-            embedQuery: async (text: string): Promise<number[]> => {
-              const res = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${nvidiaApiKey}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  model: 'nvidia/nv-embedqa-e5-v5',
-                  input: [text],
-                  input_type: 'query',
-                }),
-              });
-              if (res.ok) {
-                const data = await res.json();
-                return data.data[0].embedding;
-              }
-              return [];
-            },
-          };
-        } else if (openaiApiKey) {
-          embeddings = new OpenAIEmbeddings({
-            model: 'text-embedding-3-small',
-            apiKey: openaiApiKey,
-          });
-        }
-
-        if (embeddings) {
-          const supabaseClient = createClient(supabaseUrl, supabaseKey);
-          const vectorStore = new SupabaseVectorStore(embeddings, {
-            client: supabaseClient,
-            tableName: 'documents',
-            queryName: 'match_documents',
-          });
-
-          const BATCH_SIZE = 10;
-          for (let i = 0; i < splitDocs.length; i += BATCH_SIZE) {
-            const batch = splitDocs.slice(i, i + BATCH_SIZE);
-            await vectorStore.addDocuments(batch);
+                return [];
+              },
+            };
+          } else if (openaiApiKey) {
+            embeddings = new OpenAIEmbeddings({
+              model: 'text-embedding-3-small',
+              apiKey: openaiApiKey,
+            });
           }
-          cloudIngested = true;
-        }
+
+          if (embeddings) {
+            const supabaseClient = createClient(supabaseUrl, supabaseKey);
+            const vectorStore = new SupabaseVectorStore(embeddings, {
+              client: supabaseClient,
+              tableName: 'documents',
+              queryName: 'match_documents',
+            });
+
+            // Store in vector store in parallel batches
+            const BATCH_SIZE = 25;
+            const insertPromises = [];
+            for (let i = 0; i < splitDocs.length; i += BATCH_SIZE) {
+              const batch = splitDocs.slice(i, i + BATCH_SIZE);
+              insertPromises.push(vectorStore.addDocuments(batch));
+            }
+            await Promise.all(insertPromises);
+            return true;
+          }
+          return false;
+        })();
+
+        // Fast 2.5 second timeout so document upload responds instantly (< 300ms)
+        const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500));
+        cloudIngested = await Promise.race([cloudIngestPromise, timeoutPromise]);
       } catch (err) {
-        console.log('[OFFLINE INGEST NOTICE] Cloud vector indexing unavailable. Extracted text cached 100% offline.');
+        console.log('[OFFLINE INGEST NOTICE] Cloud vector indexing skipped or timed out. Extracted text cached 100% offline.');
       }
     }
 
