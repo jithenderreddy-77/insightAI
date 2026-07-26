@@ -89,6 +89,7 @@ export default function Home() {
   >([]);
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [offlineDocs, setOfflineDocs] = useState<{ text: string; filename: string }[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -304,6 +305,7 @@ export default function Home() {
           threadId,
           fileNames: files.map((f) => f.name),
           useLocalOffline: isOffline,
+          offlineDocuments: offlineDocs,
         }),
         signal: abortController.signal,
       });
@@ -461,9 +463,13 @@ export default function Home() {
         body: formData,
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || 'Failed to upload files');
+      }
+
+      if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
+        setOfflineDocs((prev) => [...prev, ...data.parsedDocuments]);
       }
 
       const updatedFiles = [...files, ...selectedFiles];

@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: Request) {
   try {
-    const { message, threadId, fileNames, useLocalOffline } = await req.json();
+    const { message, threadId, fileNames, useLocalOffline, offlineDocuments } = await req.json();
 
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -75,6 +75,14 @@ export async function POST(req: Request) {
       } catch (err) {
         console.log('[OFFLINE NOTICE] Supabase cloud unreachable. Running in local mode.');
       }
+    }
+
+    // Offline Document Text Fallback (when Supabase Cloud DB is unreachable)
+    if (docs.length === 0 && offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
+      docs = offlineDocuments.map((d: any) => ({
+        content: d.text,
+        metadata: { filename: d.filename || 'Uploaded Document' },
+      }));
     }
 
     // Build context block
