@@ -101,17 +101,36 @@ STRICT INSTRUCTIONS:
 1. Provide a direct, highly accurate answer based ONLY on the provided DOCUMENT CONTEXT.
 2. RICH FORMATTING:
    - TABLES: Whenever presenting structured, tabular, or comparative data (numbers, specs, lists, features), ALWAYS present them using a clean Markdown Table (e.g., | Feature | Description |).
-   - ADVANCED FLOWCHARTS & DIAGRAMS: Whenever asked for a flowchart, process, workflow, architecture, or diagram, ALWAYS generate an ADVANCED, MULTI-BRANCH Mermaid diagram directly derived from the DOCUMENT CONTEXT inside a \`\`\`mermaid code block.
-     * Use subgraphs (e.g., \`subgraph Input_Phase["📥 Input Phase"]\`).
-     * Use decision diamonds (e.g., \`C{"🔍 Verification Check"}\`).
-     * Use parallel branches (e.g., \`C -- Yes --> D\` and \`C -- No --> E\`).
-     * Use specific entity names, component labels, and extracted facts from the document text.
+   - ADVANCED FLOWCHARTS & DIAGRAMS: Whenever the user asks for a flowchart, diagram, process, workflow, architecture, or visual representation, you MUST generate a well-structured Mermaid diagram inside a \`\`\`mermaid code block. Follow these rules EXACTLY:
+     * Start with \`graph TD\` or \`flowchart TD\`.
+     * Use subgraphs to group related steps: \`subgraph Phase_Name["Phase Name"]\`.
+     * Use decision diamonds for branching: \`C{"Is data valid?"}\`.
+     * Use parallel branches: \`C -- Yes --> D\` and \`C -- No --> E\`.
+     * CRITICAL: Do NOT use emoji characters inside Mermaid node labels. Use plain text only.
+     * CRITICAL: Always wrap labels containing parentheses, colons, or commas in double quotes.
+     * Extract real entity names, component names, and steps from the document content.
+     * Example of a correct diagram:
+       \`\`\`mermaid
+       graph TD
+         subgraph Input["Input Phase"]
+           A["User uploads document"] --> B["Parse text content"]
+         end
+         subgraph Processing["Analysis Phase"]
+           B --> C{"Content type?"}
+           C -- PDF --> D["Extract PDF text"]
+           C -- Image --> E["Run OCR extraction"]
+         end
+         subgraph Output["Results"]
+           D --> F["Generate answer"]
+           E --> F
+         end
+       \`\`\`
 3. Do NOT invent, assume, or extrapolate facts outside the provided document text.
 4. If the question cannot be answered using the provided DOCUMENT CONTEXT, respond: "Based on the uploaded document, this information is not mentioned in the text."
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a helpful AI assistant. Answer the user's question clearly, concisely, and accurately using Markdown Tables and Advanced Mermaid Flowcharts (with subgraphs and decision branches) where appropriate.`;
+      : `You are a helpful AI assistant. Answer the user's question clearly, concisely, and accurately. When asked for diagrams or flowcharts, generate advanced Mermaid diagrams inside \`\`\`mermaid code blocks with subgraphs and decision branches. Do NOT use emoji in Mermaid node labels.`;
 
     // 2) Get AI Completion Stream with Automatic Offline Standalone Failover
     let aiResponseStream: ReadableStream | null = null;
@@ -139,7 +158,7 @@ ${context}`
             ],
             stream: true,
             temperature: 0.1,
-            max_tokens: 1500,
+            max_tokens: 3000,
           }),
         });
 
@@ -382,18 +401,18 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     const step3 = topicList[2] || 'Data Verification Pipeline';
     const step4 = topicList[3] || 'Synthesized Document Insights';
 
-    output += `### 🔄 Advanced Document Workflow & Architecture Diagram\n\n`;
+    output += `### Advanced Document Workflow Diagram\n\n`;
     output += `\`\`\`mermaid\ngraph TD\n`;
-    output += `  subgraph Source_Layer["📁 Document Source Layer"]\n`;
-    output += `    A["📄 ${cleanSource}"] --> B["⚡ ${step1}"]\n`;
+    output += `  subgraph Source_Layer["Document Source"]\n`;
+    output += `    A["${cleanSource}"] --> B["${step1}"]\n`;
     output += `  end\n\n`;
-    output += `  subgraph Processing_Layer["⚙️ Intelligence & Verification"]\n`;
-    output += `    B --> C{"🔍 Match Relevant Data?"}\n`;
-    output += `    C -- High Confidence --> D["📊 ${step2}"]\n`;
-    output += `    C -- Deep Analysis --> E["📝 ${step3}"]\n`;
+    output += `  subgraph Processing_Layer["Intelligence and Verification"]\n`;
+    output += `    B --> C{"Match Relevant Data?"}\n`;
+    output += `    C -- High Confidence --> D["${step2}"]\n`;
+    output += `    C -- Deep Analysis --> E["${step3}"]\n`;
     output += `  end\n\n`;
-    output += `  subgraph Output_Layer["🚀 Synthesized Output"]\n`;
-    output += `    D --> F["🎯 ${step4}"]\n`;
+    output += `  subgraph Output_Layer["Synthesized Output"]\n`;
+    output += `    D --> F["${step4}"]\n`;
     output += `    E --> F\n`;
     output += `  end\n`;
     output += `\`\`\`\n\n`;

@@ -93,15 +93,53 @@ export function ChatMessage({ message }: ChatMessageProps) {
                     tr: ({ node, ...props }) => (
                       <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" {...props} />
                     ),
+                    pre: ({ node, children, ...props }: any) => {
+                      // Check if the pre contains a mermaid code block
+                      const child = Array.isArray(children) ? children[0] : children;
+                      if (child?.props?.className?.includes('language-mermaid')) {
+                        const codeText = String(child.props.children).replace(/\n$/, '');
+                        return <MermaidDiagram chart={codeText} />;
+                      }
+                      // Check if the code content looks like a mermaid diagram
+                      const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();
+                      if (
+                        codeText.startsWith('graph ') ||
+                        codeText.startsWith('flowchart ') ||
+                        codeText.startsWith('sequenceDiagram') ||
+                        codeText.startsWith('classDiagram') ||
+                        codeText.startsWith('stateDiagram') ||
+                        codeText.startsWith('erDiagram') ||
+                        codeText.startsWith('gantt') ||
+                        codeText.startsWith('pie') ||
+                        codeText.startsWith('gitgraph') ||
+                        codeText.startsWith('journey') ||
+                        codeText.startsWith('mindmap') ||
+                        codeText.startsWith('timeline') ||
+                        (codeText.includes('subgraph') && (codeText.includes('-->') || codeText.includes('---')))
+                      ) {
+                        return <MermaidDiagram chart={codeText} />;
+                      }
+                      return <pre {...props}>{children}</pre>;
+                    },
                     code: ({ node, inline, className, children, ...props }: any) => {
                       const match = /language-(\w+)/.exec(className || '');
                       const codeString = String(children).replace(/\n$/, '');
-
                       const trimmed = codeString.trim();
-                      const isMermaidLang = match?.[1] === 'mermaid';
-                      const isDiagramPattern = !inline && (trimmed.startsWith('graph ') || trimmed.startsWith('sequenceDiagram') || trimmed.startsWith('flowchart ')) && (trimmed.includes('-->') || trimmed.includes('->') || trimmed.includes('---|'));
 
-                      if (!inline && (isMermaidLang || isDiagramPattern)) {
+                      // Detect mermaid: explicit language tag OR content pattern
+                      const isMermaidLang = match?.[1] === 'mermaid';
+                      const isMermaidContent =
+                        trimmed.startsWith('graph ') ||
+                        trimmed.startsWith('flowchart ') ||
+                        trimmed.startsWith('sequenceDiagram') ||
+                        trimmed.startsWith('classDiagram') ||
+                        trimmed.startsWith('stateDiagram') ||
+                        trimmed.startsWith('erDiagram') ||
+                        trimmed.startsWith('gantt') ||
+                        trimmed.startsWith('pie') ||
+                        (trimmed.includes('subgraph') && (trimmed.includes('-->') || trimmed.includes('---')));
+
+                      if (!inline && (isMermaidLang || isMermaidContent)) {
                         return <MermaidDiagram chart={codeString} />;
                       }
 
