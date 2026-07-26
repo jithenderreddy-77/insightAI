@@ -327,7 +327,13 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     queryLower.includes('workflow') ||
     queryLower.includes('architecture') ||
     queryLower.includes('pipeline') ||
-    queryLower.includes('step');
+    queryLower.includes('step') ||
+    queryLower.includes('draw') ||
+    queryLower.includes('create') ||
+    queryLower.includes('make') ||
+    queryLower.includes('chart') ||
+    queryLower.includes('visualize') ||
+    queryLower.includes('how');
 
   let output = `Based on your uploaded document (**${primarySource}**), here is the answer to your query:\n\n`;
 
@@ -361,12 +367,12 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   }
 
   // 3. Interactive Mermaid SVG Flowchart
-  if (wantsFlowchart || queryLower.includes('how') || queryLower.includes('step')) {
+  if (wantsFlowchart) {
     output += `### 🔄 Workflow Process Diagram\n\n`;
     output += `\`\`\`mermaid\ngraph TD\n`;
-    output += `  A["📁 ${primarySource}"] --> B["🔍 Extract Document Text"]\n`;
-    output += `  B --> C["⚡ Built-in Offline Neural Search"]\n`;
-    output += `  C --> D["📊 Synthesize Answer & Tables"]\n`;
+    output += `  A["📁 ${primarySource.replace(/"/g, '')}"] --> B["🔍 Extract Document Text"]\n`;
+    output += `  B --> C["⚡ Neural RAG Analysis"]\n`;
+    output += `  C --> D["📊 Answer & Flowchart Output"]\n`;
     output += `\`\`\`\n\n`;
   }
 

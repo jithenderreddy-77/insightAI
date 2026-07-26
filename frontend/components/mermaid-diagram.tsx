@@ -8,6 +8,34 @@ interface MermaidDiagramProps {
 
 let idCounter = 0;
 
+function sanitizeMermaidCode(rawChart: string): string {
+  let clean = rawChart
+    .replace(/^```(mermaid)?/gi, '')
+    .replace(/```$/g, '')
+    .trim();
+
+  if (
+    !clean.startsWith('graph ') &&
+    !clean.startsWith('flowchart ') &&
+    !clean.startsWith('sequenceDiagram') &&
+    !clean.startsWith('gantt') &&
+    !clean.startsWith('classDiagram')
+  ) {
+    clean = `graph TD\n${clean}`;
+  }
+
+  // Wrap unquoted labels containing special characters in double quotes: A[File (PDF)] => A["File (PDF)"]
+  clean = clean.replace(/([A-Za-z0-9_]+)\[([^"\]\n]+)\]/g, (match, nodeId, label) => {
+    if (label.includes('(') || label.includes(')') || label.includes(':') || label.includes('/') || label.includes(' ')) {
+      const safeLabel = label.replace(/"/g, "'");
+      return `${nodeId}["${safeLabel}"]`;
+    }
+    return match;
+  });
+
+  return clean;
+}
+
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>('');
@@ -37,7 +65,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     const renderDiagram = async () => {
       try {
         const mermaid = (await import('mermaid')).default;
-        
+
         mermaid.initialize({
           startOnLoad: false,
           theme: 'default',
@@ -46,15 +74,15 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           suppressErrorRendering: true,
         });
 
-        const cleanChart = chart.trim();
-        if (!cleanChart || cleanChart.length < 10) {
+        const sanitized = sanitizeMermaidCode(chart);
+        if (!sanitized || sanitized.length < 5) {
           cleanDOMErrorNodes();
           if (isMounted) setIsValid(false);
           return;
         }
 
         // Validate syntax with parse() before render() to prevent error injection during streaming
-        const valid = await mermaid.parse(cleanChart).catch(() => false);
+        const valid = await mermaid.parse(sanitized).catch(() => false);
         if (!valid) {
           cleanDOMErrorNodes();
           if (isMounted) setIsValid(false);
@@ -62,8 +90,8 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
         }
 
         const uniqueId = `mermaid_chart_${Date.now()}_${idCounter++}`;
-        const { svg } = await mermaid.render(uniqueId, cleanChart);
-        
+        const { svg } = await mermaid.render(uniqueId, sanitized);
+
         cleanDOMErrorNodes();
 
         if (isMounted && svg) {
@@ -87,7 +115,16 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   }, [chart]);
 
   if (!isValid || !svgContent) {
-    return null; // Gracefully hide partial/incomplete streaming diagrams instead of showing bomb icons or syntax error banners
+    // Styled diagram preview fallback while chart is streaming or being generated
+    return (
+      <div className="my-3 p-3.5 rounded-xl bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto border border-indigo-900/50 shadow-sm">
+        <div className="text-[10px] uppercase font-bold text-indigo-400 mb-1.5 flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+          Interactive Flowchart / Process Diagram
+        </div>
+        <pre className="text-slate-300 font-sans text-xs whitespace-pre-wrap">{chart.replace(/```(mermaid)?/g, '').trim()}</pre>
+      </div>
+    );
   }
 
   return (
