@@ -150,7 +150,7 @@ export async function POST(req: Request) {
       }
     }
 
-    docs = uniqueTopDocs;
+    const docs = uniqueTopDocs;
 
     // Build clean context block with up to 12,000 tokens
     const context = docs
