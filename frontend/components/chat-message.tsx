@@ -32,11 +32,13 @@ interface ChatMessageProps {
 function preprocessMermaidContent(content: string): string {
   // Mermaid diagram header keywords
   const mermaidHeaders = [
-    'graph TD', 'graph LR', 'graph RL', 'graph BT',
-    'flowchart TD', 'flowchart LR', 'flowchart RL', 'flowchart BT',
+    'graph', 'flowchart',
     'sequenceDiagram', 'classDiagram', 'stateDiagram',
-    'erDiagram', 'gantt', 'pie', 'gitgraph', 'journey',
+    'erDiagram', 'journey', 'gantt', 'pie', 'gitgraph',
     'mindmap', 'timeline',
+    'requirementDiagram', 'quadrantChart',
+    'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
+    'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
   ];
 
   // 1. Fix generic code fences (``` without mermaid tag) that contain mermaid content
@@ -152,19 +154,16 @@ export function ChatMessage({ message }: ChatMessageProps) {
                       }
                       // Check if the code content looks like a mermaid diagram
                       const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();
+                      const mermaidPrefixes = [
+                        'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
+                        'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
+                        'journey', 'mindmap', 'timeline',
+                        'requirementDiagram', 'quadrantChart',
+                        'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
+                        'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
+                      ];
                       if (
-                        codeText.startsWith('graph ') ||
-                        codeText.startsWith('flowchart ') ||
-                        codeText.startsWith('sequenceDiagram') ||
-                        codeText.startsWith('classDiagram') ||
-                        codeText.startsWith('stateDiagram') ||
-                        codeText.startsWith('erDiagram') ||
-                        codeText.startsWith('gantt') ||
-                        codeText.startsWith('pie') ||
-                        codeText.startsWith('gitgraph') ||
-                        codeText.startsWith('journey') ||
-                        codeText.startsWith('mindmap') ||
-                        codeText.startsWith('timeline') ||
+                        mermaidPrefixes.some((p) => codeText.startsWith(p)) ||
                         (codeText.includes('subgraph') && (codeText.includes('-->') || codeText.includes('---')))
                       ) {
                         return <MermaidDiagram chart={codeText} />;
@@ -178,15 +177,14 @@ export function ChatMessage({ message }: ChatMessageProps) {
 
                       // Detect mermaid: explicit language tag OR content pattern
                       const isMermaidLang = match?.[1] === 'mermaid';
-                      const isMermaidContent =
-                        trimmed.startsWith('graph ') ||
-                        trimmed.startsWith('flowchart ') ||
-                        trimmed.startsWith('sequenceDiagram') ||
-                        trimmed.startsWith('classDiagram') ||
-                        trimmed.startsWith('stateDiagram') ||
-                        trimmed.startsWith('erDiagram') ||
-                        trimmed.startsWith('gantt') ||
-                        trimmed.startsWith('pie') ||
+                      const isMermaidContent = [
+                        'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
+                        'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
+                        'journey', 'mindmap', 'timeline',
+                        'requirementDiagram', 'quadrantChart',
+                        'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
+                        'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
+                      ].some((p) => trimmed.startsWith(p)) ||
                         (trimmed.includes('subgraph') && (trimmed.includes('-->') || trimmed.includes('---')));
 
                       if (!inline && (isMermaidLang || isMermaidContent)) {

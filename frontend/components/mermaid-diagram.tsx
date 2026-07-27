@@ -26,93 +26,16 @@ interface MermaidDiagramProps {
 let idCounter = 0;
 
 /**
- * Sanitize Mermaid code to prevent parse failures:
- * 1. Strip ```mermaid fences
- * 2. Remove emoji characters (Mermaid parser chokes on them)
- * 3. Auto-quote unquoted node labels with special characters
- * 4. Add default graph direction if missing
+ * Strip code fences and normalise line endings.
+ * Let Mermaid parse its own syntax — no regex hacks.
  */
-function sanitizeMermaidCode(rawChart: string): string {
-  let clean = rawChart
-    .replace(/^```(mermaid)?[\s]*/gi, '')
-    .replace(/```\s*$/g, '')
+function sanitizeMermaidCode(raw: string): string {
+  return raw
+    .replace(/^```mermaid\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```$/g, '')
+    .replace(/\r\n/g, '\n')
     .trim();
-
-  // 1. Remove emoji characters — Mermaid parser cannot handle them
-  clean = clean.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '');
-
-  // 2. Ensure valid diagram header
-  const lines = clean.split('\n');
-  const firstLine = lines[0].trim().toLowerCase();
-  if (
-    !firstLine.startsWith('graph ') &&
-    !firstLine.startsWith('flowchart ') &&
-    !firstLine.startsWith('sequencediagram') &&
-    !firstLine.startsWith('gantt') &&
-    !firstLine.startsWith('classdiagram') &&
-    !firstLine.startsWith('statediagram') &&
-    !firstLine.startsWith('erdiagram') &&
-    !firstLine.startsWith('pie') &&
-    !firstLine.startsWith('gitgraph') &&
-    !firstLine.startsWith('journey') &&
-    !firstLine.startsWith('mindmap') &&
-    !firstLine.startsWith('timeline')
-  ) {
-    clean = `graph TD\n${clean}`;
-  }
-
-  // 3. Line-by-line sanitization
-  const cleanLines = clean.split('\n').map((line) => {
-    let l = line.trim();
-    if (!l) return '';
-
-    // Strip trailing semicolons (they break Mermaid 10+ parsing)
-    l = l.replace(/;+\s*$/g, '');
-
-    // Strip classDef / class / style lines — these frequently reference
-    // undefined node IDs or use unsupported CSS and crash Mermaid v11 render.
-    if (/^\s*(classDef|class\s|style\s|linkStyle\s)/i.test(l)) {
-      return '';
-    }
-
-    // Fix invalid arrow connectors (-->> or ->>> or --->) into standard -->
-    l = l.replace(/\s*-->>\s*/g, ' --> ');
-    l = l.replace(/\s*->>>\s*/g, ' --> ');
-    l = l.replace(/\s*--->\s*/g, ' --> ');
-
-    // Fix double-quotes
-    l = l.replace(/""+/g, '"');
-
-    // Subgraph lines: subgraph ID["Title"]
-    if (l.toLowerCase().startsWith('subgraph')) {
-      // Fix subgraph ID[""Title""] -> subgraph ID["Title"]
-      return l.replace(/subgraph\s+([A-Za-z0-9_]+)\s*\[?"*([^"\]\n]+)"*\]?/i, 'subgraph $1["$2"]');
-    }
-
-    // Node definitions & edges:
-    // Decision nodes: C{Condition?} -> C{"Condition?"}
-    l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").trim();
-      return `${id}{"${cleanLabel}"}`;
-    });
-
-    // Stadium nodes: A([Start]) -> A(["Start"])
-    l = l.replace(/([A-Za-z0-9_]+)\(\[([^\]"\n]+)\]\)/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").trim();
-      return `${id}(["${cleanLabel}"])`;
-    });
-
-    // Rectangle nodes: B[Process] -> B["Process"]
-    l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").trim();
-      return `${id}["${cleanLabel}"]`;
-    });
-
-    // Final quotes cleanup for line
-    return l.replace(/""+/g, '"');
-  });
-
-  return cleanLines.filter(Boolean).join('\n');
 }
 
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
@@ -148,22 +71,22 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
         mermaid.initialize({
           startOnLoad: false,
-          theme: 'default',
           securityLevel: 'loose',
-          fontFamily: 'Inter, system-ui, sans-serif',
-          suppressErrorRendering: true,
+          theme:
+            document.documentElement.classList.contains('dark')
+              ? 'dark'
+              : 'default',
+          deterministicIds: true,
           flowchart: {
-            useMaxWidth: false,
             htmlLabels: true,
-            curve: 'basis',
+            curve: 'linear',
+            useMaxWidth: true,
           },
-          themeVariables: {
-            primaryColor: '#6366f1',
-            primaryTextColor: '#ffffff',
-            primaryBorderColor: '#4f46e5',
-            lineColor: '#64748b',
-            secondaryColor: '#f59e0b',
-            tertiaryColor: '#10b981',
+          sequence: {
+            useMaxWidth: true,
+          },
+          gantt: {
+            useMaxWidth: true,
           },
         });
 
@@ -174,10 +97,9 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           return;
         }
 
-        // In Mermaid v10+/v11, parse() returns Promise<void> on success,
-        // NOT a truthy value. We skip the broken parse() validation and
-        // go straight to render() which also validates internally.
-        // If render throws, we catch it below.
+        // Validate syntax before rendering — gives cleaner failures
+        await mermaid.parse(sanitized);
+
         const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;
         const { svg } = await mermaid.render(uniqueId, sanitized);
 
@@ -191,9 +113,12 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           if (isMounted) setRenderState('error');
         }
       } catch (err) {
-        console.warn('[MermaidDiagram] render failed:', err);
+        console.error(err);
         cleanDOMErrorNodes();
-        if (isMounted) setRenderState('error');
+        if (isMounted) {
+          setSvgContent('');
+          setRenderState('error');
+        }
       }
     };
 
@@ -246,27 +171,27 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     );
   }
 
-  // Error / fallback: show styled code block
+  // Error / fallback: show clear error state with syntax
   if (renderState === 'error' || !svgContent) {
     const cleanedCode = chart.replace(/```(mermaid)?/gi, '').trim();
     return (
-      <div className="my-4 p-4 rounded-2xl bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto border border-slate-700 shadow-md">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-3">
-          <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5" />
-            Mermaid Diagram Syntax
-          </span>
+      <div className="my-4 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-bold text-red-700 dark:text-red-400">Diagram couldn&apos;t be rendered</h3>
+            <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-0.5">Mermaid syntax appears invalid.</p>
+          </div>
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 text-[10px] text-slate-400 hover:text-white gap-1"
+            className="h-7 text-[11px] text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 gap-1"
             onClick={handleCopyCode}
           >
-            {copiedCode ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+            {copiedCode ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
             {copiedCode ? 'Copied' : 'Copy Code'}
           </Button>
         </div>
-        <pre className="text-slate-300 text-xs whitespace-pre-wrap leading-relaxed">{cleanedCode}</pre>
+        <pre className="text-xs font-mono text-red-900 dark:text-red-200 bg-red-100/60 dark:bg-red-950/60 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{cleanedCode}</pre>
       </div>
     );
   }
