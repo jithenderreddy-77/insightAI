@@ -61,35 +61,44 @@ function sanitizeMermaidCode(rawChart: string): string {
     clean = `graph TD\n${clean}`;
   }
 
-  // 3. Normalize quote duplicates before pattern matching
-  clean = clean.replace(/""+/g, '"');
+  // 3. Line-by-line sanitization
+  const cleanLines = clean.split('\n').map((line) => {
+    let l = line.trim();
+    if (!l) return '';
 
-  // 4. Auto-quote decision node labels: C{Label} -> C{"Label"}
-  clean = clean.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
-    if (label.startsWith('"') && label.endsWith('"')) return `${id}{${label}}`;
-    const cleanLabel = label.replace(/"/g, "'").trim();
-    return `${id}{"${cleanLabel}"}`;
+    // Fix double-quotes
+    l = l.replace(/""+/g, '"');
+
+    // Subgraph lines: subgraph ID["Title"]
+    if (l.toLowerCase().startsWith('subgraph')) {
+      // Fix subgraph ID[""Title""] -> subgraph ID["Title"]
+      return l.replace(/subgraph\s+([A-Za-z0-9_]+)\s*\[?"*([^"\]\n]+)"*\]?/i, 'subgraph $1["$2"]');
+    }
+
+    // Node definitions & edges:
+    // Decision nodes: C{Condition?} -> C{"Condition?"}
+    l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}{"${cleanLabel}"}`;
+    });
+
+    // Stadium nodes: A([Start]) -> A(["Start"])
+    l = l.replace(/([A-Za-z0-9_]+)\(\[([^\]"\n]+)\]\)/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}(["${cleanLabel}"])`;
+    });
+
+    // Rectangle nodes: B[Process] -> B["Process"]
+    l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}["${cleanLabel}"]`;
+    });
+
+    // Final quotes cleanup for line
+    return l.replace(/""+/g, '"');
   });
 
-  // 5. Auto-quote stadium nodes: A([Start]) -> A(["Start"])
-  clean = clean.replace(/([A-Za-z0-9_]+)\(\[([^\]"\n]+)\]\)/g, (m, id, label) => {
-    if (label.startsWith('"') && label.endsWith('"')) return `${id}([${label}])`;
-    const cleanLabel = label.replace(/"/g, "'").trim();
-    return `${id}(["${cleanLabel}"])`;
-  });
-
-  // 6. Auto-quote standard rectangle nodes: B[Process] -> B["Process"]
-  clean = clean.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
-    if (m.trim().toLowerCase().startsWith('subgraph')) return m;
-    if (label.startsWith('"') && label.endsWith('"')) return `${id}[${label}]`;
-    const cleanLabel = label.replace(/"/g, "'").trim();
-    return `${id}["${cleanLabel}"]`;
-  });
-
-  // 7. Final pass to clean any accidental double double-quotes
-  clean = clean.replace(/""+/g, '"');
-
-  return clean;
+  return cleanLines.filter(Boolean).join('\n');
 }
 
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {

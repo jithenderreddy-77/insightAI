@@ -174,12 +174,19 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
      * ### ⚠️ Potential Gaps or Considerations: Any missing requirements
      * ### 📌 Final Hiring Recommendation: Detailed justification based on the resume facts.
 
-2. FLOWCHARTS & DIAGRAMS: When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:
-   - You MUST generate a professional, interactive Mermaid diagram inside a \`\`\`mermaid code block.
-   - Use \`graph TD\` or \`graph LR\`.
-   - Group logical phases into subgraphs: \`subgraph Phase1["Phase Title"]\` ... \`end\`.
-   - Use decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
-   - Do NOT use emojis inside Mermaid node labels. Wrap special characters in double quotes.
+2. WORLD-CLASS FLOWCHARTS & DIAGRAMS (FAR SUPERIOR TO CHATGPT & GEMINI):
+   When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:
+   - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a \`\`\`mermaid code block.
+   - MANDATORY DIAGRAM STRUCTURE:
+     * Use \`graph TD\` (Top-Down) or \`graph LR\` (Left-Right).
+     * Group logical steps into 3 to 5 clear subgraphs: \`subgraph Phase1["Phase 1: Data Collection & Ingestion"]\` ... \`end\`.
+     * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT.
+     * Include decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
+     * Include 12 to 25 connected nodes for a comprehensive visual map.
+     * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):
+       - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.
+       - Always wrap node labels containing special characters (parentheses, colons, ampersands, commas) in double quotes, e.g. \`A["Parse Text (PDF/OCR)"]\`.
+       - Do NOT output stray \`classDef\` lines referencing undefined node IDs.
 
 3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
 
@@ -187,7 +194,7 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and styled nodes. Do NOT use emoji in Mermaid labels.`;
+      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Do NOT use emoji in Mermaid labels.`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
