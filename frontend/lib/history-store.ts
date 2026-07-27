@@ -190,8 +190,8 @@ export async function authenticateUserAccount(
 
     saveUser(profile);
 
-    // Also load user's cloud chat threads into local cache
-    loadCloudThreadsToLocal(acc.id);
+    // Also load user's cloud chat threads into local cache (survives redeployments!)
+    await loadCloudThreadsToLocal(acc.id);
 
     return { user: profile };
   }

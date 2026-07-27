@@ -483,6 +483,7 @@ export default function Home() {
           messages,
           updatedAt: new Date().toISOString(),
           fileNames: fileNamesList,
+          createdAt: ''
         };
         saveUserThread(user.id, currentThread);
         setThreads((prev) => {
