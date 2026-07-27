@@ -17,12 +17,14 @@ export async function POST(req: Request) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
-    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const openaiApiKey = process.env.OPENAI_API_KEY;    // Prepare query terms for hybrid keyword scoring
+    const queryLower = message.toLowerCase();
+    const queryTerms = queryLower
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w: string) => w.length > 2);
 
-    // 1) Get query embedding with automatic offline fallback
-    const queryEmbedding = await getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
-
-    let docs: any[] = [];
+    let allCandidateDocs: any[] = [];
 
     // Attempt Supabase document retrieval if configured & connected
     if (supabaseUrl && supabaseKey && !useLocalOffline) {
@@ -43,33 +45,18 @@ export async function POST(req: Request) {
             });
 
             if (matchingFileDocs.length > 0) {
-              const scoredDocs = matchingFileDocs.map((d: any) => {
-                let emb = d.embedding;
-                if (typeof emb === 'string') {
-                  try { emb = JSON.parse(emb); } catch {}
-                }
-                let score = 0;
-                if (Array.isArray(emb) && queryEmbedding && Array.isArray(queryEmbedding) && emb.length === queryEmbedding.length) {
-                  for (let i = 0; i < queryEmbedding.length; i++) {
-                    score += queryEmbedding[i] * emb[i];
-                  }
-                }
-                return { ...d, score };
-              });
-
-              scoredDocs.sort((a, b) => b.score - a.score);
-              docs = scoredDocs.slice(0, 10);
+              allCandidateDocs.push(...matchingFileDocs);
             }
           }
         }
 
-        if (docs.length === 0 && queryEmbedding && queryEmbedding.length > 0) {
+        if (allCandidateDocs.length === 0 && queryEmbedding && queryEmbedding.length > 0) {
           const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
             query_embedding: queryEmbedding,
-            match_count: 10,
+            match_count: 30,
           });
           if (!matchError && rawDocs) {
-            docs = rawDocs;
+            allCandidateDocs.push(...rawDocs);
           }
         }
       } catch (err) {
@@ -77,88 +64,118 @@ export async function POST(req: Request) {
       }
     }
 
-    // Offline Document Text Fallback (when Supabase Cloud DB is unreachable or operating offline)
-    if (docs.length === 0 && offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
-      docs = offlineDocuments.map((d: any) => ({
-        content: d.text,
-        metadata: { filename: d.filename || 'Uploaded Document' },
-      }));
+    // Merge active offline documents uploaded in the current session
+    if (offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
+      offlineDocuments.forEach((d: any) => {
+        const docText = d.text || '';
+        if (docText.length < 8000) {
+          // Small file: include full content as a single complete chunk
+          allCandidateDocs.push({
+            content: docText,
+            metadata: { filename: d.filename || 'Uploaded Document' },
+            isFullDoc: true,
+          });
+        } else {
+          // Large file: split into 1500-char overlapping passages
+          const chunkSize = 1500;
+          const overlap = 300;
+          for (let i = 0; i < docText.length; i += (chunkSize - overlap)) {
+            const chunk = docText.slice(i, i + chunkSize);
+            if (chunk.trim().length > 50) {
+              allCandidateDocs.push({
+                content: chunk,
+                metadata: { filename: d.filename || 'Uploaded Document' },
+              });
+            }
+          }
+        }
+      });
     }
 
-    // Build clean context block
+    // HYBRID RERANKING: Combine Vector Cosine Similarity + BM25 Keyword Frequency + Exact Phrase Match
+    const scoredDocs = allCandidateDocs.map((doc: any) => {
+      const text = doc.content || '';
+      const textLower = text.toLowerCase();
+
+      // 1. Vector Score
+      let vectorScore = 0;
+      let emb = doc.embedding;
+      if (typeof emb === 'string') {
+        try { emb = JSON.parse(emb); } catch {}
+      }
+      if (Array.isArray(emb) && queryEmbedding && Array.isArray(queryEmbedding) && emb.length === queryEmbedding.length) {
+        for (let i = 0; i < queryEmbedding.length; i++) {
+          vectorScore += queryEmbedding[i] * emb[i];
+        }
+      }
+
+      // 2. Keyword BM25 Score
+      let keywordScore = 0;
+      queryTerms.forEach((term: string) => {
+        const matches = (textLower.match(new RegExp(`\\b${term}`, 'g')) || []).length;
+        keywordScore += matches * 2;
+      });
+
+      // 3. Exact Phrase Match Bonus
+      let exactBonus = 0;
+      if (textLower.includes(queryLower)) {
+        exactBonus = 15;
+      }
+
+      const totalScore = (vectorScore * 10) + keywordScore + exactBonus + (doc.isFullDoc ? 5 : 0);
+
+      return {
+        ...doc,
+        totalScore,
+      };
+    });
+
+    // Deduplicate and select top 25 chunks
+    scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
+
+    const seenContents = new Set<string>();
+    const uniqueTopDocs: any[] = [];
+
+    for (const d of scoredDocs) {
+      const snippet = (d.content || '').slice(0, 100);
+      if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
+        seenContents.add(snippet);
+        uniqueTopDocs.push(d);
+        if (uniqueTopDocs.length >= 25) break;
+      }
+    }
+
+    docs = uniqueTopDocs;
+
+    // Build clean context block with up to 12,000 tokens
     const context = docs
       .map((doc: any, i: number) => {
         const sourceName = doc.metadata?.filename || doc.metadata?.source || 'Uploaded Document';
-        return `[DOCUMENT SOURCE: ${sourceName} — Chunk ${i + 1}]\n${doc.content}`;
+        return `[DOCUMENT SOURCE: ${sourceName} — Passage ${i + 1}]\n${doc.content}`;
       })
       .filter(Boolean)
       .join('\n\n---\n\n');
 
     const systemPrompt = context
-      ? `You are a world-class AI document analyst that produces exceptionally rich, publication-quality responses. Answer the user's question with absolute accuracy using ONLY facts from the DOCUMENT CONTEXT below.
+      ? `You are an elite AI Document Intelligence Engine powered by GPT-4o. Your mission is to provide exceptionally accurate, thorough, and insightful answers to the user's questions based ONLY on the DOCUMENT CONTEXT below.
 
-RESPONSE FORMAT RULES:
-1. ANSWER: Provide a clear, comprehensive answer based ONLY on the DOCUMENT CONTEXT.
-2. MARKDOWN TABLES: For any structured, comparative, or multi-attribute data, produce a well-formatted Markdown table with headers and proper alignment.
-3. MERMAID DIAGRAMS: When the user requests a flowchart, diagram, process map, architecture, workflow, pipeline, overview, or any visual representation, you MUST produce a professional-grade Mermaid diagram. Follow ALL these rules:
-
-   MERMAID SYNTAX RULES (MANDATORY):
-   a) Start with \`graph TD\` (top-down) or \`graph LR\` (left-right).
-   b) Use \`subgraph ID["Readable Title"]\` to group logical phases. End each with \`end\`.
-   c) Use \`NodeID["Label"]\` for process steps, \`NodeID{"Label"}\` for decisions, \`NodeID(["Label"])\` for start/end terminals, \`NodeID[["Label"]]\` for subroutines.
-   d) Connect nodes with \`-->\` arrows. Use labeled edges like \`A -- "label text" --> B\`.
-   e) For decisions, create branches: \`D -- "Yes" --> E\` and \`D -- "No" --> F\`.
-   f) Use parallel paths, loops, and feedback arrows where the document describes iterative or branching processes.
-   g) Style with \`classDef\` for color-coded nodes: \`classDef primary fill:#4f46e5,stroke:#3730a3,color:#fff\`.
-   h) NEVER use emoji or unicode characters inside node labels — plain ASCII text only.
-   i) Always wrap labels containing special characters (parentheses, colons, ampersands, commas) in double quotes.
-   j) Extract REAL entity names, system components, phases, roles, and data flows from the document text. DO NOT use generic placeholder labels.
-   k) Aim for 10-25 nodes across 3-5 subgraphs for a comprehensive, detailed diagram.
-   l) Close every \`subgraph\` with \`end\`.
-   m) Apply classDef styles at the end with \`class NodeID className\`.
-
-   EXAMPLE of a correct, high-quality diagram:
-   \`\`\`mermaid
-   graph TD
-     subgraph Input_Phase["Data Collection"]
-       A["Start"] --> B["Receive user query"]
-       B --> C["Load uploaded document"]
-     end
-     subgraph Analysis_Phase["Intelligent Processing"]
-       C --> D{"Document type?"}
-       D -- "PDF" --> E["Extract text via parser"]
-       D -- "Image" --> F["Run OCR engine"]
-       D -- "Spreadsheet" --> G["Parse tabular data"]
-       E --> H["Chunk text into segments"]
-       F --> H
-       G --> H
-     end
-     subgraph AI_Phase["AI Reasoning"]
-       H --> I["Generate vector embeddings"]
-       I --> J["Semantic similarity search"]
-       J --> K{"Relevant match found?"}
-       K -- "Yes" --> L["Synthesize AI answer"]
-       K -- "No" --> M["Request clarification"]
-     end
-     subgraph Output_Phase["Response Delivery"]
-       L --> N["Format with tables and diagrams"]
-       M --> N
-       N --> O["End"]
-     end
-     classDef primary fill:#4f46e5,stroke:#3730a3,color:#fff
-     classDef decision fill:#f59e0b,stroke:#d97706,color:#000
-     classDef terminal fill:#10b981,stroke:#059669,color:#fff
-     class B,C,E,F,G,H,I,J,L,M,N primary
-     class D,K decision
-     class A,O terminal
-   \`\`\`
-
-4. Do NOT invent or extrapolate facts outside the DOCUMENT CONTEXT.
-5. If unanswerable from context, state: "Based on the uploaded document, this information is not mentioned in the text."
+CRITICAL INSTRUCTIONS FOR TOUGH & COMPLEX QUESTIONS:
+1. DEEP ANALYTICAL REASONING: For complex, detailed, multi-part, or challenging questions, analyze all provided passages thoroughly. Synthesize facts across different sections of the document to form a complete, comprehensive answer.
+2. ACCURACY & EVIDENCE: Base your answer STRICTLY on facts, figures, tables, and statements explicitly present in the DOCUMENT CONTEXT. Quote or cite specific data points when answering technical questions.
+3. RICH FORMATTING:
+   - HEADINGS & BULLET LISTS: Use bold headings (###) and bullet points to break down complex explanations into clear, readable sections.
+   - MARKDOWN TABLES: Whenever comparing attributes, presenting specs, metrics, numerical data, or lists of features, ALWAYS generate a well-structured Markdown table (| Feature | Details |).
+   - MERMAID DIAGRAMS: When asked for a flowchart, workflow, architecture, process map, or visual representation, generate a professional Mermaid diagram in a \`\`\`mermaid code block with subgraphs, decision diamonds, and color-coded classDef nodes.
+     * Use \`graph TD\` or \`graph LR\`.
+     * Group logical phases with \`subgraph Phase_Name["Phase Title"]\` ... \`end\`.
+     * Use decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
+     * NEVER use emojis inside Mermaid node labels.
+     * Always wrap special characters in double quotes.
+4. ABSOLUTE HONESTY: Do NOT invent, assume, or extrapolate facts outside the DOCUMENT CONTEXT. If the specific answer is not mentioned in the provided document, state: "Based on the uploaded document, this specific information is not mentioned in the text."
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a world-class AI assistant. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams with subgraphs, decision diamonds, styled classDef nodes, labeled edges, and 10+ nodes. Do NOT use emoji in Mermaid labels. Always wrap special characters in quotes.`;
+      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams with subgraphs, decision diamonds, styled classDef nodes, labeled edges, and 10+ nodes. Do NOT use emoji in Mermaid labels. Always wrap special characters in quotes.`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
