@@ -183,10 +183,11 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
      * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT.
      * Include decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
      * Include 12 to 25 connected nodes for a comprehensive visual map.
-     * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):
-       - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.
-       - Always wrap node labels containing special characters (parentheses, colons, ampersands, commas) in double quotes, e.g. \`A["Parse Text (PDF/OCR)"]\`.
-       - Do NOT output stray \`classDef\` lines referencing undefined node IDs.
+      * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):
+        - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.
+        - Always wrap node labels containing special characters (parentheses, colons, ampersands, commas) in double quotes, e.g. \`A["Parse Text (PDF/OCR)"]\`.
+        - Use standard connectors \`-->\` or \`-- "Label" -->\`. NEVER output invalid double-arrow \`-->>\` connectors or trailing semicolons \`;\`.
+        - Do NOT output stray \`classDef\` lines referencing undefined node IDs.
 
 3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
 

@@ -66,6 +66,14 @@ function sanitizeMermaidCode(rawChart: string): string {
     let l = line.trim();
     if (!l) return '';
 
+    // Strip trailing semicolons (they break Mermaid 10+ parsing)
+    l = l.replace(/;+\s*$/g, '');
+
+    // Fix invalid arrow connectors (-->> or ->>> or --->) into standard -->
+    l = l.replace(/\s*-->>\s*/g, ' --> ');
+    l = l.replace(/\s*->>>\s*/g, ' --> ');
+    l = l.replace(/\s*--->\s*/g, ' --> ');
+
     // Fix double-quotes
     l = l.replace(/""+/g, '"');
 
