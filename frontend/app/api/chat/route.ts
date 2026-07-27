@@ -17,7 +17,12 @@ export async function POST(req: Request) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
-    const openaiApiKey = process.env.OPENAI_API_KEY;    // Prepare query terms for hybrid keyword scoring
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+
+    // 1) Get query embedding with automatic offline fallback
+    const queryEmbedding = await getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
+
+    // Prepare query terms for hybrid keyword scoring
     const queryLower = message.toLowerCase();
     const queryTerms = queryLower
       .replace(/[^a-z0-9\s]/g, ' ')
@@ -159,23 +164,30 @@ export async function POST(req: Request) {
     const systemPrompt = context
       ? `You are an elite AI Document Intelligence Engine powered by GPT-4o. Your mission is to provide exceptionally accurate, thorough, and insightful answers to the user's questions based ONLY on the DOCUMENT CONTEXT below.
 
-CRITICAL INSTRUCTIONS FOR TOUGH & COMPLEX QUESTIONS:
-1. DEEP ANALYTICAL REASONING: For complex, detailed, multi-part, or challenging questions, analyze all provided passages thoroughly. Synthesize facts across different sections of the document to form a complete, comprehensive answer.
-2. ACCURACY & EVIDENCE: Base your answer STRICTLY on facts, figures, tables, and statements explicitly present in the DOCUMENT CONTEXT. Quote or cite specific data points when answering technical questions.
-3. RICH FORMATTING:
-   - HEADINGS & BULLET LISTS: Use bold headings (###) and bullet points to break down complex explanations into clear, readable sections.
-   - MARKDOWN TABLES: Whenever comparing attributes, presenting specs, metrics, numerical data, or lists of features, ALWAYS generate a well-structured Markdown table (| Feature | Details |).
-   - MERMAID DIAGRAMS: When asked for a flowchart, workflow, architecture, process map, or visual representation, generate a professional Mermaid diagram in a \`\`\`mermaid code block with subgraphs, decision diamonds, and color-coded classDef nodes.
-     * Use \`graph TD\` or \`graph LR\`.
-     * Group logical phases with \`subgraph Phase_Name["Phase Title"]\` ... \`end\`.
-     * Use decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
-     * NEVER use emojis inside Mermaid node labels.
-     * Always wrap special characters in double quotes.
-4. ABSOLUTE HONESTY: Do NOT invent, assume, or extrapolate facts outside the DOCUMENT CONTEXT. If the specific answer is not mentioned in the provided document, state: "Based on the uploaded document, this specific information is not mentioned in the text."
+CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
+1. RESUME / CV EVALUATION & SELECTION ANALYSIS: When asked evaluative, suitability, or selection questions about a CV or Resume (e.g. "Is this candidate worthy to select?", "Should we hire this person?", "Evaluate this resume"):
+   - Perform a comprehensive analysis of the candidate's skills, experience, achievements, education, and qualifications from the document.
+   - Provide a clear structured evaluation report with:
+     * ### 🎯 Selection Verdict: (e.g. Highly Recommended / Qualified / Needs Skill Alignment)
+     * ### 📊 Qualifications & Strengths Table: (Markdown table of skills, years of experience, key projects)
+     * ### 💡 Key Highlights & Strengths: Bullet points of major accomplishments
+     * ### ⚠️ Potential Gaps or Considerations: Any missing requirements
+     * ### 📌 Final Hiring Recommendation: Detailed justification based on the resume facts.
+
+2. FLOWCHARTS & DIAGRAMS: When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:
+   - You MUST generate a professional, interactive Mermaid diagram inside a \`\`\`mermaid code block.
+   - Use \`graph TD\` or \`graph LR\`.
+   - Group logical phases into subgraphs: \`subgraph Phase1["Phase Title"]\` ... \`end\`.
+   - Use decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
+   - Do NOT use emojis inside Mermaid node labels. Wrap special characters in double quotes.
+
+3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
+
+4. ABSOLUTE ACCURACY: Base your factual statements strictly on facts present in the DOCUMENT CONTEXT.
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams with subgraphs, decision diamonds, styled classDef nodes, labeled edges, and 10+ nodes. Do NOT use emoji in Mermaid labels. Always wrap special characters in quotes.`;
+      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce professional-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and styled nodes. Do NOT use emoji in Mermaid labels.`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
