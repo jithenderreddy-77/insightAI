@@ -23,6 +23,56 @@ interface ChatMessageProps {
   };
 }
 
+/**
+ * Pre-process message content to wrap bare Mermaid diagram blocks in
+ * proper ```mermaid code fences so ReactMarkdown can detect them.
+ * Also wraps content that's ALREADY in generic code fences (```\n graph TD...)
+ * but missing the mermaid language tag.
+ */
+function preprocessMermaidContent(content: string): string {
+  // Mermaid diagram header keywords
+  const mermaidHeaders = [
+    'graph TD', 'graph LR', 'graph RL', 'graph BT',
+    'flowchart TD', 'flowchart LR', 'flowchart RL', 'flowchart BT',
+    'sequenceDiagram', 'classDiagram', 'stateDiagram',
+    'erDiagram', 'gantt', 'pie', 'gitgraph', 'journey',
+    'mindmap', 'timeline',
+  ];
+
+  // 1. Fix generic code fences (``` without mermaid tag) that contain mermaid content
+  let processed = content.replace(
+    /```\s*\n([\s\S]*?)```/g,
+    (match, codeBlock: string) => {
+      const trimmedBlock = codeBlock.trim();
+      const isMermaid = mermaidHeaders.some((h) => trimmedBlock.startsWith(h)) ||
+        (trimmedBlock.includes('subgraph') && (trimmedBlock.includes('-->') || trimmedBlock.includes('---')));
+      if (isMermaid) {
+        return '```mermaid\n' + codeBlock + '```';
+      }
+      return match;
+    }
+  );
+
+  // 2. Detect bare (unfenced) mermaid blocks in the text
+  // Look for lines starting with mermaid headers followed by node/edge lines
+  for (const header of mermaidHeaders) {
+    const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const bareBlockRegex = new RegExp(
+      `(?:^|\\n)(${escapedHeader}\\s*\\n(?:[ \\t]+[^\\n]+\\n?)+)`,
+      'g'
+    );
+    processed = processed.replace(bareBlockRegex, (match, block: string) => {
+      // Don't wrap if it's already inside a code fence
+      const beforeMatch = processed.substring(0, processed.indexOf(match));
+      const openFences = (beforeMatch.match(/```/g) || []).length;
+      if (openFences % 2 === 1) return match; // inside a code fence already
+      return '\n```mermaid\n' + block.trim() + '\n```\n';
+    });
+  }
+
+  return processed;
+}
+
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
@@ -161,7 +211,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
                     },
                   }}
                 >
-                  {message.content}
+                  {preprocessMermaidContent(message.content)}
                 </ReactMarkdown>
               </div>
             )}

@@ -69,6 +69,12 @@ function sanitizeMermaidCode(rawChart: string): string {
     // Strip trailing semicolons (they break Mermaid 10+ parsing)
     l = l.replace(/;+\s*$/g, '');
 
+    // Strip classDef / class / style lines — these frequently reference
+    // undefined node IDs or use unsupported CSS and crash Mermaid v11 render.
+    if (/^\s*(classDef|class\s|style\s|linkStyle\s)/i.test(l)) {
+      return '';
+    }
+
     // Fix invalid arrow connectors (-->> or ->>> or --->) into standard -->
     l = l.replace(/\s*-->>\s*/g, ' --> ');
     l = l.replace(/\s*->>>\s*/g, ' --> ');
@@ -168,14 +174,10 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           return;
         }
 
-        // Validate syntax before render
-        const valid = await mermaid.parse(sanitized).catch(() => false);
-        if (!valid) {
-          cleanDOMErrorNodes();
-          if (isMounted) setRenderState('error');
-          return;
-        }
-
+        // In Mermaid v10+/v11, parse() returns Promise<void> on success,
+        // NOT a truthy value. We skip the broken parse() validation and
+        // go straight to render() which also validates internally.
+        // If render throws, we catch it below.
         const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;
         const { svg } = await mermaid.render(uniqueId, sanitized);
 
@@ -184,8 +186,12 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
         if (isMounted && svg) {
           setSvgContent(svg);
           setRenderState('success');
+        } else {
+          cleanDOMErrorNodes();
+          if (isMounted) setRenderState('error');
         }
       } catch (err) {
+        console.warn('[MermaidDiagram] render failed:', err);
         cleanDOMErrorNodes();
         if (isMounted) setRenderState('error');
       }
