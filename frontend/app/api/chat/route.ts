@@ -179,15 +179,18 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
    - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a \`\`\`mermaid code block.
    - MANDATORY DIAGRAM STRUCTURE:
      * Use \`graph TD\` (Top-Down) or \`graph LR\` (Left-Right).
-     * Group logical steps into 3 to 5 clear subgraphs: \`subgraph Phase1["Phase 1: Data Collection & Ingestion"]\` ... \`end\`.
+     * Group logical steps into 3 to 5 clear subgraphs: \`subgraph Phase1["Phase 1: Ingestion"]\` ... \`end\`.
      * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT.
-     * Include decision diamonds \`C{"Condition?"}\` with labeled branches \`C -- "Yes" --> D\` and \`C -- "No" --> E\`.
+     * Include decision diamonds \`C{"Condition?"}\` with labeled branches \`C -->|Yes| D\` and \`C -->|No| E\`.
      * Include 12 to 25 connected nodes for a comprehensive visual map.
       * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):
+        - NEVER write \`-->|Label|> B\`. Pipe labels are written \`A -->|Label| B\` (NO trailing \`>\`).
+        - NEVER write \`subgraph Title with spaces\`. ALWAYS write \`subgraph SG1["Title with spaces"]\` with ID and double quotes.
+        - ALWAYS close every subgraph block with \`end\`.
         - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.
-        - Always wrap node labels containing special characters (parentheses, colons, ampersands, commas) in double quotes, e.g. \`A["Parse Text (PDF/OCR)"]\`.
-        - Use standard connectors \`-->\` or \`-- "Label" -->\`. NEVER output invalid double-arrow \`-->>\` connectors or trailing semicolons \`;\`.
-        - Do NOT output stray \`classDef\` lines referencing undefined node IDs.
+        - Always wrap node labels containing spaces or special characters in double quotes: \`A["Parse Text (PDF/OCR)"]\`.
+        - Use standard connectors \`-->\` or \`A -->|Label| B\`. NEVER output invalid double-arrows \`-->>\` or trailing semicolons \`;\`.
+        - Do NOT output stray \`classDef\` or \`style\` lines referencing undefined node IDs.
 
 3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
 
@@ -195,7 +198,7 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Do NOT use emoji in Mermaid labels.`;
+      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use \`subgraph SG1["Title"]\` ... \`end\`, use \`A -->|Label| B\` (never \`-->|Label|>\`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;

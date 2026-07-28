@@ -26,16 +26,97 @@ interface MermaidDiagramProps {
 let idCounter = 0;
 
 /**
- * Strip code fences and normalise line endings.
- * Let Mermaid parse its own syntax — no regex hacks.
+ * Smart Sanitizer for Mermaid code:
+ * 1. Strips code fences and normalises line endings
+ * 2. Removes choke characters (emojis/unicode)
+ * 3. Fixes invalid pipe label syntax like `-->|Label|> B` -> `-->|Label| B`
+ * 4. Fixes unquoted subgraph titles `subgraph Title with spaces` -> `subgraph SG1["Title with spaces"]`
+ * 5. Fixes invalid arrows `-->>` -> `-->` and unquoted node labels
+ * 6. Ensures subgraphs are balanced with matching `end` tags
  */
 function sanitizeMermaidCode(raw: string): string {
-  return raw
-    .replace(/^```mermaid\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```$/g, '')
+  if (!raw) return '';
+
+  let clean = raw
+    .replace(/^```(mermaid)?[\s]*/gi, '')
+    .replace(/```\s*$/g, '')
     .replace(/\r\n/g, '\n')
     .trim();
+
+  // Remove emojis and invalid unicode characters that choke Mermaid parser
+  clean = clean.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '');
+
+  // Ensure valid diagram header
+  const mermaidHeaders = [
+    'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
+    'erDiagram', 'journey', 'gantt', 'pie', 'gitgraph', 'mindmap', 'timeline',
+    'requirementDiagram', 'quadrantChart', 'architecture-beta', 'block-beta',
+    'xychart-beta', 'sankey-beta', 'C4Context', 'C4Container', 'C4Component',
+    'C4Dynamic', 'C4Deployment',
+  ];
+  const firstLine = clean.split('\n')[0].trim();
+  const hasValidHeader = mermaidHeaders.some((h) => firstLine.toLowerCase().startsWith(h.toLowerCase()));
+  if (!hasValidHeader) {
+    clean = `graph TD\n${clean}`;
+  }
+
+  let sgCounter = 1;
+  let openSubgraphs = 0;
+
+  const lines = clean.split('\n').map((line) => {
+    let l = line.trim();
+    if (!l) return '';
+
+    // Strip trailing semicolons
+    l = l.replace(/;+\s*$/g, '');
+
+    // FIX LLM PIPE LABEL BUG: `-->|Label|> B` -> `-->|Label| B`
+    l = l.replace(/-->\|([^|\n]+)\|\s*>\s*/g, '-->|$1| ');
+    l = l.replace(/-->\|([^|\n]+)\|>+/g, '-->|$1|');
+
+    // FIX SUBGRAPH HEADER BUG: `subgraph Title with spaces` -> `subgraph SG1["Title with spaces"]`
+    if (l.toLowerCase().startsWith('subgraph')) {
+      openSubgraphs++;
+      const matchWithQuotes = l.match(/^subgraph\s+([A-Za-z0-9_]+)\s*\["([^"]+)"\]/i);
+      const matchSingleWord = l.match(/^subgraph\s+([A-Za-z0-9_]+)\s*$/i);
+      if (!matchWithQuotes && !matchSingleWord) {
+        const title = l.replace(/^subgraph\s+/i, '').replace(/["\[\]]/g, '').trim();
+        const sgId = `SG_${sgCounter++}`;
+        return `subgraph ${sgId}["${title || 'Phase'}"]`;
+      }
+    }
+
+    if (l.toLowerCase() === 'end') {
+      if (openSubgraphs > 0) openSubgraphs--;
+    }
+
+    // Fix invalid arrows: `-->>`, `->>>`, `--->`
+    l = l.replace(/\s*-->>\s*/g, ' --> ');
+    l = l.replace(/\s*->>>\s*/g, ' --> ');
+    l = l.replace(/\s*--->\s*/g, ' --> ');
+
+    // Fix unquoted node labels: `A[Label text]` -> `A["Label text"]`
+    l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}["${cleanLabel}"]`;
+    });
+
+    // Fix decision node labels: `C{Condition text}` -> `C{"Condition text"}`
+    l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}{"${cleanLabel}"}`;
+    });
+
+    return l;
+  });
+
+  // Balance missing `end` statements for subgraphs
+  while (openSubgraphs > 0) {
+    lines.push('end');
+    openSubgraphs--;
+  }
+
+  return lines.filter(Boolean).join('\n');
 }
 
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
@@ -90,15 +171,23 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           },
         });
 
-        const sanitized = sanitizeMermaidCode(chart);
+        let sanitized = sanitizeMermaidCode(chart);
         if (!sanitized || sanitized.length < 10) {
           cleanDOMErrorNodes();
           if (isMounted) setRenderState('error');
           return;
         }
 
-        // Validate syntax before rendering — gives cleaner failures
-        await mermaid.parse(sanitized);
+        // Try primary render
+        try {
+          await mermaid.parse(sanitized);
+        } catch (parseErr) {
+          console.warn('[Mermaid] Primary parse failed, attempting fallback simplification...', parseErr);
+          // Fallback: strip pipe labels `-->|Label|` to simple `-->` if complex labels broke parser
+          sanitized = sanitized.replace(/-->\|([^|\n]+)\|/g, '-->');
+          sanitized = sanitized.replace(/^\s*(classDef|class\s|style\s|linkStyle\s).*/gm, '');
+          await mermaid.parse(sanitized);
+        }
 
         const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;
         const { svg } = await mermaid.render(uniqueId, sanitized);
@@ -113,7 +202,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           if (isMounted) setRenderState('error');
         }
       } catch (err) {
-        console.error(err);
+        console.error('[MermaidDiagram] Final render failure:', err);
         cleanDOMErrorNodes();
         if (isMounted) {
           setSvgContent('');
