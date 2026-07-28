@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     if (invalidFiles.length > 0) {
       return NextResponse.json(
         {
-          error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size: 50MB`,
+          error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size: 500MB`,
           invalidFiles: invalidFiles.map((f) => f.name),
         },
         { status: 400 },

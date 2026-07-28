@@ -37,11 +37,17 @@ let idCounter = 0;
 function sanitizeMermaidCode(raw: string): string {
   if (!raw) return '';
 
-  let clean = raw
-    .replace(/^```(mermaid)?[\s]*/gi, '')
-    .replace(/```\s*$/g, '')
-    .replace(/\r\n/g, '\n')
-    .trim();
+  let clean = raw.trim();
+
+  // Extract block between ```mermaid and ``` if present
+  const mermaidBlockMatch = clean.match(/```(?:mermaid)?([\s\S]*?)```/i);
+  if (mermaidBlockMatch) {
+    clean = mermaidBlockMatch[1].trim();
+  } else {
+    clean = clean.replace(/^```(mermaid)?[\s]*/gi, '').replace(/```\s*$/g, '').trim();
+  }
+
+  clean = clean.replace(/\r\n/g, '\n');
 
   // Remove emojis and invalid unicode characters that choke Mermaid parser
   clean = clean.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '');
@@ -62,6 +68,7 @@ function sanitizeMermaidCode(raw: string): string {
 
   let sgCounter = 1;
   let openSubgraphs = 0;
+  const definedNodes = new Set<string>();
 
   const lines = clean.split('\n').map((line) => {
     let l = line.trim();
@@ -70,9 +77,15 @@ function sanitizeMermaidCode(raw: string): string {
     // Strip trailing semicolons
     l = l.replace(/;+\s*$/g, '');
 
-    // FIX LLM PIPE LABEL BUG: `-->|Label|> B` -> `-->|Label| B`
-    l = l.replace(/-->\|([^|\n]+)\|\s*>\s*/g, '-->|$1| ');
-    l = l.replace(/-->\|([^|\n]+)\|>+/g, '-->|$1|');
+    // FIX PIPE LABELS: Replace `&` with `and`, double quote labels, strip trailing `>`
+    // Converts `-->|Label & Info|> B` or `-->|Label| B` -> `-->|"Label and Info"| B`
+    l = l.replace(/-->\s*\|([^|\n]+)\|(?:>|\s*>)?/g, (m, label) => {
+      const cleanLabel = label
+        .replace(/["\\]/g, '')
+        .replace(/&/g, 'and')
+        .trim();
+      return `-->|"${cleanLabel}"| `;
+    });
 
     // FIX SUBGRAPH HEADER BUG: `subgraph Title with spaces` -> `subgraph SG1["Title with spaces"]`
     if (l.toLowerCase().startsWith('subgraph')) {
@@ -95,17 +108,36 @@ function sanitizeMermaidCode(raw: string): string {
     l = l.replace(/\s*->>>\s*/g, ' --> ');
     l = l.replace(/\s*--->\s*/g, ' --> ');
 
-    // Fix unquoted node labels: `A[Label text]` -> `A["Label text"]`
+    // Fix node IDs with spaces: `Phase 1["Label"]` -> `Phase_1["Label"]`
+    l = l.replace(/^([A-Za-z0-9_\s]+)\["([^"]+)"\]/g, (m, id, label) => {
+      const cleanId = id.trim().replace(/\s+/g, '_');
+      return `${cleanId}["${label}"]`;
+    });
+
+    // Fix unquoted node labels and deduplicate repeated node definitions: `A[Label text]` -> `A["Label text"]`
     l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").trim();
+      const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
+      if (definedNodes.has(id)) {
+        return id;
+      }
+      definedNodes.add(id);
       return `${id}["${cleanLabel}"]`;
     });
 
     // Fix decision node labels: `C{Condition text}` -> `C{"Condition text"}`
     l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").trim();
+      const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
+      if (definedNodes.has(id)) {
+        return id;
+      }
+      definedNodes.add(id);
       return `${id}{"${cleanLabel}"}`;
     });
+
+    // Sanitize style & classDef directives
+    if (l.startsWith('style ') || l.startsWith('classDef ') || l.startsWith('class ') || l.startsWith('linkStyle ')) {
+      l = l.replace(/;+\s*$/g, '');
+    }
 
     return l;
   });
@@ -130,12 +162,11 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const cleanDOMErrorNodes = useCallback(() => {
     if (typeof document === 'undefined') return;
     try {
-      document.querySelectorAll('.error-icon, [id^="dmermaid"], [id^="mermaid-error"]').forEach((n) => n.remove());
+      document.querySelectorAll('.error-icon, #dmermaid-error, #mermaid-error').forEach((n) => n.remove());
       document.querySelectorAll('div').forEach((div) => {
         if (
-          (div.id && div.id.startsWith('dmermaid')) ||
-          (typeof div.className === 'string' && div.className.includes('error-icon')) ||
-          (div.textContent && div.textContent.includes('mermaid version'))
+          (div.id && (div.id === 'dmermaid-error' || div.id === 'mermaid-error')) ||
+          (typeof div.className === 'string' && div.className.includes('error-icon'))
         ) {
           div.remove();
         }
@@ -153,14 +184,11 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'loose',
-          theme:
-            document.documentElement.classList.contains('dark')
-              ? 'dark'
-              : 'default',
+          theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
           deterministicIds: true,
           flowchart: {
             htmlLabels: true,
-            curve: 'linear',
+            curve: 'basis',
             useMaxWidth: true,
           },
           sequence: {
@@ -178,15 +206,53 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           return;
         }
 
-        // Try primary render
+        // Multi-tier progressive fallback parser
+        let parseSuccess = false;
+
+        // Tier 1: Primary parse with sanitized code
         try {
           await mermaid.parse(sanitized);
-        } catch (parseErr) {
-          console.warn('[Mermaid] Primary parse failed, attempting fallback simplification...', parseErr);
-          // Fallback: strip pipe labels `-->|Label|` to simple `-->` if complex labels broke parser
-          sanitized = sanitized.replace(/-->\|([^|\n]+)\|/g, '-->');
-          sanitized = sanitized.replace(/^\s*(classDef|class\s|style\s|linkStyle\s).*/gm, '');
-          await mermaid.parse(sanitized);
+          parseSuccess = true;
+        } catch (e1) {
+          console.warn('[Mermaid] Tier 1 parse failed. Attempting Tier 2 (Strip style/classDef & replace reserved chars)...');
+        }
+
+        // Tier 2: Strip style/classDef directives, replace reserved ampersands
+        if (!parseSuccess) {
+          try {
+            sanitized = sanitized
+              .replace(/^\s*(classDef|class\s|style\s|linkStyle\s).*/gm, '')
+              .replace(/&/g, 'and');
+            await mermaid.parse(sanitized);
+            parseSuccess = true;
+          } catch (e2) {
+            console.warn('[Mermaid] Tier 2 parse failed. Attempting Tier 3 (Flatten subgraphs)...');
+          }
+        }
+
+        // Tier 3: Flatten subgraphs (strip subgraph and end lines)
+        if (!parseSuccess) {
+          try {
+            sanitized = sanitized.replace(/^\s*(subgraph|end).*/gm, '').trim();
+            if (!sanitized.toLowerCase().startsWith('graph') && !sanitized.toLowerCase().startsWith('flowchart')) {
+              sanitized = `graph TD\n${sanitized}`;
+            }
+            await mermaid.parse(sanitized);
+            parseSuccess = true;
+          } catch (e3) {
+            console.warn('[Mermaid] Tier 3 parse failed. Attempting Tier 4 (Strip all pipe labels)...');
+          }
+        }
+
+        // Tier 4: Strip all pipe labels down to simple arrows (A --> B)
+        if (!parseSuccess) {
+          try {
+            sanitized = sanitized.replace(/-->\s*\|[^|\n]+\|/g, '-->');
+            await mermaid.parse(sanitized);
+            parseSuccess = true;
+          } catch (e4) {
+            console.error('[Mermaid] All 4 parse tiers failed for chart:', chart);
+          }
         }
 
         const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;

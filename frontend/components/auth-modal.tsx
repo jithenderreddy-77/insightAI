@@ -46,6 +46,7 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     }
 
     if (result.user) {
+      triggerWelcomeEmail(result.user.displayName, result.user.email || signInUsername);
       onLoginSuccess(result.user);
       onClose();
     }

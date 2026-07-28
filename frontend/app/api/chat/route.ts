@@ -161,6 +161,25 @@ export async function POST(req: Request) {
       .filter(Boolean)
       .join('\n\n---\n\n');
 
+    const mermaidInstructions = [
+      '2. WORLD-CLASS FLOWCHARTS & DIAGRAMS (FAR SUPERIOR TO CHATGPT & GEMINI):',
+      '   When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:',
+      '   - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a ```mermaid code block.',
+      '   - MANDATORY DIAGRAM STRUCTURE:',
+      '     * Use `graph TD` (Top-Down) or `graph LR` (Left-Right).',
+      '     * Group logical steps into 3 to 5 clear subgraphs: `subgraph Phase1["Phase 1: Ingestion"]` ... `end`.',
+      '     * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT.',
+      '     * Include decision diamonds `C{"Condition?"}` with labeled branches `C -->|"Yes"| D` and `C -->|"No"| E`.',
+      '     * Include 12 to 25 connected nodes for a comprehensive visual map.',
+      '     * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):',
+      '       - ALWAYS write pipe labels wrapped in double quotes: `A -->|"Label text"| B` (NEVER add trailing `>` after pipe).',
+      '       - ALWAYS write subgraphs with ID and quotes: `subgraph SG1["Title with spaces"]` ... `end`.',
+      '       - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.',
+      '       - Always wrap node labels containing spaces or special characters in double quotes: `A["Parse Text (PDF/OCR)"]`.',
+      '       - Use standard connectors `-->` or `A -->|"Label"| B`. NEVER output invalid double-arrows `-->>` or semicolons `;`.',
+      '       - Do NOT output stray `classDef` or `style` lines.',
+    ].join('\n');
+
     const systemPrompt = context
       ? `You are an elite AI Document Intelligence Engine powered by GPT-4o. Your mission is to provide exceptionally accurate, thorough, and insightful answers to the user's questions based ONLY on the DOCUMENT CONTEXT below.
 
@@ -174,23 +193,7 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
      * ### ⚠️ Potential Gaps or Considerations: Any missing requirements
      * ### 📌 Final Hiring Recommendation: Detailed justification based on the resume facts.
 
-2. WORLD-CLASS FLOWCHARTS & DIAGRAMS (FAR SUPERIOR TO CHATGPT & GEMINI):
-   When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:
-   - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a \`\`\`mermaid code block.
-   - MANDATORY DIAGRAM STRUCTURE:
-     * Use \`graph TD\` (Top-Down) or \`graph LR\` (Left-Right).
-     * Group logical steps into 3 to 5 clear subgraphs: \`subgraph Phase1["Phase 1: Ingestion"]\` ... \`end\`.
-     * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT.
-     * Include decision diamonds \`C{"Condition?"}\` with labeled branches \`C -->|Yes| D\` and \`C -->|No| E\`.
-     * Include 12 to 25 connected nodes for a comprehensive visual map.
-      * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):
-        - NEVER write \`-->|Label|> B\`. Pipe labels are written \`A -->|Label| B\` (NO trailing \`>\`).
-        - NEVER write \`subgraph Title with spaces\`. ALWAYS write \`subgraph SG1["Title with spaces"]\` with ID and double quotes.
-        - ALWAYS close every subgraph block with \`end\`.
-        - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.
-        - Always wrap node labels containing spaces or special characters in double quotes: \`A["Parse Text (PDF/OCR)"]\`.
-        - Use standard connectors \`-->\` or \`A -->|Label| B\`. NEVER output invalid double-arrows \`-->>\` or trailing semicolons \`;\`.
-        - Do NOT output stray \`classDef\` or \`style\` lines referencing undefined node IDs.
+${mermaidInstructions}
 
 3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
 
@@ -198,7 +201,7 @@ CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in \`\`\`mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use \`subgraph SG1["Title"]\` ... \`end\`, use \`A -->|Label| B\` (never \`-->|Label|>\`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.`;
+      : 'You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in ```mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use `subgraph SG1["Title"]` ... `end`, use `A -->|Label| B` (never `-->|Label|>`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.';
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
@@ -447,7 +450,12 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     queryLower.includes('make') ||
     queryLower.includes('chart') ||
     queryLower.includes('visualize') ||
-    queryLower.includes('how');
+    queryLower.includes('how') ||
+    queryLower.includes('advantage') ||
+    queryLower.includes('working') ||
+    queryLower.includes('benefit') ||
+    queryLower.includes('overview') ||
+    queryLower.includes('map');
 
   let output = `Based on your uploaded document (**${primarySource}**), here is the answer to your query:\n\n`;
 
@@ -499,8 +507,8 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     output += `  end\n\n`;
     output += `  subgraph Processing_Layer["Intelligence and Verification"]\n`;
     output += `    B --> C{"Match Relevant Data?"}\n`;
-    output += `    C -- High Confidence --> D["${step2}"]\n`;
-    output += `    C -- Deep Analysis --> E["${step3}"]\n`;
+    output += `    C -->|"High Confidence"| D["${step2}"]\n`;
+    output += `    C -->|"Deep Analysis"| E["${step3}"]\n`;
     output += `  end\n\n`;
     output += `  subgraph Output_Layer["Synthesized Output"]\n`;
     output += `    D --> F["${step4}"]\n`;
