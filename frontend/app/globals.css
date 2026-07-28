@@ -115,12 +115,10 @@
   animation: fadeIn 0.4s ease-out forwards;
 }
 
-/* BANISH ALL MERMAID ERROR DOM NODES — Wildcard selectors catch dynamic IDs */
-/* Mermaid v11 generates error nodes with dynamic IDs like d1mermaid-error-abc123 */
-[id*="mermaid-error"],
-[id*="mermaid"] .error-icon,
+/* BANISH MERMAID ERROR DOM NODES WITHOUT HIDING VALID DIAGRAMS */
 .error-icon,
-.mermaid-error,
+#dmermaid-error,
+#mermaid-error,
 div.error-icon {
   display: none !important;
   visibility: hidden !important;
@@ -134,7 +132,3 @@ div.error-icon {
   left: -9999px !important;
 }
 
-/* Hide the hidden mermaid render sandbox container */
-#__mermaid_render_sandbox__ {
-  display: none !important;
-}

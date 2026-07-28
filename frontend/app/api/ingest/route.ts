@@ -14,10 +14,8 @@ import { SupabaseVectorStore } from '@langchain/community/vectorstores/supabase'
 import { createClient } from '@supabase/supabase-js';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 
-// Configuration constants
-// Vercel Hobby plan has a 4.5MB serverless function body limit.
-// We set 4MB to leave headroom for form data overhead.
-const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB per file (Vercel Hobby plan limit)
+// Configuration constants — Supports up to 500MB files
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB per file
 const MAX_FILES = 50; // up to 50 files simultaneously
 
 function isFileSupported(file: File): boolean {
@@ -35,50 +33,71 @@ export async function POST(request: NextRequest) {
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
 
-    const formData = await request.formData();
-    const files: File[] = [];
-
-    for (const [key, value] of formData.entries()) {
-      if (key === 'files' && value instanceof File) {
-        files.push(value);
-      }
-    }
-
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
-    }
-
-    if (files.length > MAX_FILES) {
-      return NextResponse.json(
-        { error: `Too many files. Maximum ${MAX_FILES} files allowed.` },
-        { status: 400 },
-      );
-    }
-
-    const invalidFiles = files.filter((file) => {
-      return !isFileSupported(file) || file.size > MAX_FILE_SIZE;
-    });
-
-    if (invalidFiles.length > 0) {
-      return NextResponse.json(
-        {
-          error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size per file: 4MB`,
-          invalidFiles: invalidFiles.map((f) => f.name),
-        },
-        { status: 400 },
-      );
-    }
-
+    const contentType = request.headers.get('content-type') || '';
     const allDocs: Document[] = [];
     const errors: string[] = [];
 
-    for (const file of files) {
-      try {
-        const fileDocs = await processDocument(file);
-        allDocs.push(...fileDocs);
-      } catch (error: any) {
-        console.error(`Error processing file ${file.name}:`, error);
-        errors.push(`Failed to process ${file.name}: ${error.message}`);
+    // Handle JSON payload (sent from client chunking for huge >4MB / 200MB+ files)
+    if (contentType.includes('application/json')) {
+      const jsonBody = await request.json();
+      const docsPayload = jsonBody.parsedDocuments || jsonBody.documents || [];
+
+      for (const item of docsPayload) {
+        const text = item.text || item.content || '';
+        const filename = item.filename || item.source || 'Uploaded Large File';
+        if (text.trim().length > 0) {
+          allDocs.push(
+            new Document({
+              pageContent: text,
+              metadata: { filename, source: filename },
+            })
+          );
+        }
+      }
+    } else {
+      // Handle Multipart FormData file upload
+      const formData = await request.formData();
+      const files: File[] = [];
+
+      for (const [key, value] of formData.entries()) {
+        if (key === 'files' && value instanceof File) {
+          files.push(value);
+        }
+      }
+
+      if (!files || files.length === 0) {
+        return NextResponse.json({ error: 'No files provided' }, { status: 400 });
+      }
+
+      if (files.length > MAX_FILES) {
+        return NextResponse.json(
+          { error: `Too many files. Maximum ${MAX_FILES} files allowed.` },
+          { status: 400 },
+        );
+      }
+
+      const invalidFiles = files.filter((file) => {
+        return !isFileSupported(file) || file.size > MAX_FILE_SIZE;
+      });
+
+      if (invalidFiles.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size per file: 500MB`,
+            invalidFiles: invalidFiles.map((f) => f.name),
+          },
+          { status: 400 },
+        );
+      }
+
+      for (const file of files) {
+        try {
+          const fileDocs = await processDocument(file);
+          allDocs.push(...fileDocs);
+        } catch (error: any) {
+          console.error(`Error processing file ${file.name}:`, error);
+          errors.push(`Failed to process ${file.name}: ${error.message}`);
+        }
       }
     }
 

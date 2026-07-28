@@ -451,14 +451,14 @@ export default function Home() {
       return;
     }
 
-    // Client-side file size guard (Vercel Hobby plan: 4.5MB body limit)
-    const MAX_CLIENT_FILE_SIZE = 4 * 1024 * 1024; // 4MB
-    const oversizedFiles = selectedFiles.filter((f) => f.size > MAX_CLIENT_FILE_SIZE);
+    // Supports files up to 500MB per file
+    const MAX_ALLOWED_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+    const oversizedFiles = selectedFiles.filter((f) => f.size > MAX_ALLOWED_FILE_SIZE);
     if (oversizedFiles.length > 0) {
       const names = oversizedFiles.map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)}MB)`).join(', ');
       toast({
-        title: 'File too large',
-        description: `Max file size is 4MB per file. These files are too large: ${names}. Please compress or split them.`,
+        title: 'File exceeds 500MB limit',
+        description: `Maximum file size is 500MB. These files are too large: ${names}.`,
         variant: 'destructive',
       });
       return;
@@ -469,9 +469,37 @@ export default function Home() {
     const allParsedDocs: any[] = [];
 
     try {
-      // Upload files one at a time to stay under Vercel body size limit
+      // Process each file (small or huge up to 500MB)
       for (const file of selectedFiles) {
         try {
+          // If file is >3.5MB (e.g. 200MB+), process text/content on client-side to bypass Vercel 4.5MB serverless payload limit
+          if (file.size > 3.5 * 1024 * 1024) {
+            const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+            
+            // For text-based formats (TXT, CSV, MD, JSON, SVG, etc.)
+            if (['.txt', '.csv', '.md', '.json', '.svg', '.html', '.xml'].includes(ext)) {
+              const fullText = await file.text();
+              const response = await fetch('/api/ingest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  parsedDocuments: [{ text: fullText, filename: file.name }],
+                }),
+              });
+
+              if (!response.ok) {
+                throw new Error(`Failed to ingest ${file.name}`);
+              }
+              const data = await response.json();
+              if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
+                allParsedDocs.push(...data.parsedDocuments);
+              }
+              successfulFiles.push(file);
+              continue;
+            }
+          }
+
+          // Standard FormData upload for files <= 3.5MB or binary formats
           const formData = new FormData();
           formData.append('files', file);
 
@@ -490,11 +518,10 @@ export default function Home() {
             if (!response.ok) {
               throw new Error(
                 response.status === 413
-                  ? `File "${file.name}" is too large for the server (max 4MB).`
+                  ? `File "${file.name}" is too large for direct upload (${(file.size / 1024 / 1024).toFixed(1)}MB). Please convert to TXT/PDF or split file.`
                   : `Server error (${response.status}): ${textBody.slice(0, 100)}`
               );
             }
-            // Try parsing as JSON anyway in case content-type header is wrong
             try {
               data = JSON.parse(textBody);
             } catch {
