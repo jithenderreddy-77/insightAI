@@ -15,7 +15,9 @@ import { createClient } from '@supabase/supabase-js';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 
 // Configuration constants
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB per file
+// Vercel Hobby plan has a 4.5MB serverless function body limit.
+// We set 4MB to leave headroom for form data overhead.
+const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB per file (Vercel Hobby plan limit)
 const MAX_FILES = 50; // up to 50 files simultaneously
 
 function isFileSupported(file: File): boolean {
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
     if (invalidFiles.length > 0) {
       return NextResponse.json(
         {
-          error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size: 500MB`,
+          error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size per file: 4MB`,
           invalidFiles: invalidFiles.map((f) => f.name),
         },
         { status: 400 },
@@ -90,10 +92,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Split text into 500 character chunks with 80 character overlap
+    // Split text into 1000 character chunks with 200 character overlap
+    // Larger chunks preserve context (e.g., resume experience sections stay together)
     const textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 500,
-      chunkOverlap: 80,
+      chunkSize: 1000,
+      chunkOverlap: 200,
     });
 
     const splitDocs = await textSplitter.splitDocuments(allDocs);

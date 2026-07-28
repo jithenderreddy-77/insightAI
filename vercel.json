@@ -2,5 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "bash -c 'if [ -d \"frontend\" ]; then cd frontend; fi && npm run build'",
-  "installCommand": "bash -c 'if [ -d \"frontend\" ]; then cd frontend; fi && npm install --legacy-peer-deps'"
+  "installCommand": "bash -c 'if [ -d \"frontend\" ]; then cd frontend; fi && npm install --legacy-peer-deps'",
+  "functions": {
+    "frontend/app/api/ingest/route.ts": {
+      "maxDuration": 60
+    },
+    "frontend/app/api/chat/route.ts": {
+      "maxDuration": 60
+    }
+  }
 }

@@ -451,57 +451,111 @@ export default function Home() {
       return;
     }
 
+    // Client-side file size guard (Vercel Hobby plan: 4.5MB body limit)
+    const MAX_CLIENT_FILE_SIZE = 4 * 1024 * 1024; // 4MB
+    const oversizedFiles = selectedFiles.filter((f) => f.size > MAX_CLIENT_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      const names = oversizedFiles.map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)}MB)`).join(', ');
+      toast({
+        title: 'File too large',
+        description: `Max file size is 4MB per file. These files are too large: ${names}. Please compress or split them.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setIsUploading(true);
+    const successfulFiles: File[] = [];
+    const allParsedDocs: any[] = [];
+
     try {
-      const formData = new FormData();
-      selectedFiles.forEach((file) => {
-        formData.append('files', file);
-      });
+      // Upload files one at a time to stay under Vercel body size limit
+      for (const file of selectedFiles) {
+        try {
+          const formData = new FormData();
+          formData.append('files', file);
 
-      const response = await fetch('/api/ingest', {
-        method: 'POST',
-        body: formData,
-      });
+          const response = await fetch('/api/ingest', {
+            method: 'POST',
+            body: formData,
+          });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to upload files');
-      }
-
-      if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
-        setOfflineDocs((prev) => [...prev, ...data.parsedDocuments]);
-      }
-
-      const updatedFiles = [...files, ...selectedFiles];
-      setFiles(updatedFiles);
-
-      if (user && threadId) {
-        const fileNamesList = updatedFiles.map((f) => f.name);
-        const currentThread: ChatThread = {
-          id: threadId,
-          title: updatedFiles[0]?.name || 'Chat Conversation',
-          messages,
-          updatedAt: new Date().toISOString(),
-          fileNames: fileNamesList,
-          createdAt: ''
-        };
-        saveUserThread(user.id, currentThread);
-        setThreads((prev) => {
-          const idx = prev.findIndex((t) => t.id === threadId);
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = currentThread;
-            return updated;
+          // Robust error handling: Vercel may return non-JSON responses (e.g., 413 plain text)
+          let data: any;
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            data = await response.json();
+          } else {
+            const textBody = await response.text();
+            if (!response.ok) {
+              throw new Error(
+                response.status === 413
+                  ? `File "${file.name}" is too large for the server (max 4MB).`
+                  : `Server error (${response.status}): ${textBody.slice(0, 100)}`
+              );
+            }
+            // Try parsing as JSON anyway in case content-type header is wrong
+            try {
+              data = JSON.parse(textBody);
+            } catch {
+              data = { message: textBody };
+            }
           }
-          return [currentThread, ...prev];
+
+          if (!response.ok) {
+            throw new Error(data.error || `Failed to upload ${file.name}`);
+          }
+
+          if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
+            allParsedDocs.push(...data.parsedDocuments);
+          }
+          successfulFiles.push(file);
+        } catch (fileError) {
+          console.error(`Error uploading ${file.name}:`, fileError);
+          toast({
+            title: `Failed: ${file.name}`,
+            description: fileError instanceof Error ? fileError.message : 'Upload failed for this file.',
+            variant: 'destructive',
+          });
+        }
+      }
+
+      if (allParsedDocs.length > 0) {
+        setOfflineDocs((prev) => [...prev, ...allParsedDocs]);
+      }
+
+      if (successfulFiles.length > 0) {
+        const updatedFiles = [...files, ...successfulFiles];
+        setFiles(updatedFiles);
+
+        if (user && threadId) {
+          const fileNamesList = updatedFiles.map((f) => f.name);
+          const currentThread: ChatThread = {
+            id: threadId,
+            title: updatedFiles[0]?.name || 'Chat Conversation',
+            messages,
+            updatedAt: new Date().toISOString(),
+            fileNames: fileNamesList,
+            createdAt: ''
+          };
+          saveUserThread(user.id, currentThread);
+          setThreads((prev) => {
+            const idx = prev.findIndex((t) => t.id === threadId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = currentThread;
+              return updated;
+            }
+            return [currentThread, ...prev];
+          });
+        }
+
+        toast({
+          title: 'Success',
+          description: `${successfulFiles.length} file${successfulFiles.length > 1 ? 's' : ''} uploaded and indexed successfully`,
+          variant: 'default',
         });
       }
-
-      toast({
-        title: 'Success',
-        description: `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} uploaded and indexed successfully`,
-        variant: 'default',
-      });
     } catch (error) {
       console.error('Error uploading files:', error);
       toast({

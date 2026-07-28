@@ -58,7 +58,7 @@ export async function POST(req: Request) {
         if (allCandidateDocs.length === 0 && queryEmbedding && queryEmbedding.length > 0) {
           const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
             query_embedding: queryEmbedding,
-            match_count: 30,
+            match_count: 40,
           });
           if (!matchError && rawDocs) {
             allCandidateDocs.push(...rawDocs);
@@ -81,9 +81,9 @@ export async function POST(req: Request) {
             isFullDoc: true,
           });
         } else {
-          // Large file: split into 1500-char overlapping passages
-          const chunkSize = 1500;
-          const overlap = 300;
+          // Large file: split into 2000-char overlapping passages for better context preservation
+          const chunkSize = 2000;
+          const overlap = 400;
           for (let i = 0; i < docText.length; i += (chunkSize - overlap)) {
             const chunk = docText.slice(i, i + chunkSize);
             if (chunk.trim().length > 50) {
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
       };
     });
 
-    // Deduplicate and select top 25 chunks
+    // Deduplicate and select top 30 chunks
     scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
 
     const seenContents = new Set<string>();
@@ -146,13 +146,13 @@ export async function POST(req: Request) {
       if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
         seenContents.add(snippet);
         uniqueTopDocs.push(d);
-        if (uniqueTopDocs.length >= 25) break;
+        if (uniqueTopDocs.length >= 30) break;
       }
     }
 
     const docs = uniqueTopDocs;
 
-    // Build clean context block with up to 12,000 tokens
+    // Build clean context block
     const context = docs
       .map((doc: any, i: number) => {
         const sourceName = doc.metadata?.filename || doc.metadata?.source || 'Uploaded Document';
@@ -162,7 +162,7 @@ export async function POST(req: Request) {
       .join('\n\n---\n\n');
 
     const mermaidInstructions = [
-      '2. WORLD-CLASS FLOWCHARTS & DIAGRAMS (FAR SUPERIOR TO CHATGPT & GEMINI):',
+      '3. WORLD-CLASS FLOWCHARTS & DIAGRAMS:',
       '   When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:',
       '   - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a ```mermaid code block.',
       '   - MANDATORY DIAGRAM STRUCTURE:',
@@ -181,32 +181,48 @@ export async function POST(req: Request) {
     ].join('\n');
 
     const systemPrompt = context
-      ? `You are an elite AI Document Intelligence Engine powered by GPT-4o. Your mission is to provide exceptionally accurate, thorough, and insightful answers to the user's questions based ONLY on the DOCUMENT CONTEXT below.
+      ? `You are an elite AI Document Intelligence Engine. Your ONLY job is to provide exceptionally accurate answers based STRICTLY on the DOCUMENT CONTEXT provided below.
 
-CRITICAL INSTRUCTIONS FOR ALL QUESTIONS:
-1. RESUME / CV EVALUATION & SELECTION ANALYSIS: When asked evaluative, suitability, or selection questions about a CV or Resume (e.g. "Is this candidate worthy to select?", "Should we hire this person?", "Evaluate this resume"):
-   - Perform a comprehensive analysis of the candidate's skills, experience, achievements, education, and qualifications from the document.
-   - Provide a clear structured evaluation report with:
-     * ### 🎯 Selection Verdict: (e.g. Highly Recommended / Qualified / Needs Skill Alignment)
-     * ### 📊 Qualifications & Strengths Table: (Markdown table of skills, years of experience, key projects)
-     * ### 💡 Key Highlights & Strengths: Bullet points of major accomplishments
-     * ### ⚠️ Potential Gaps or Considerations: Any missing requirements
-     * ### 📌 Final Hiring Recommendation: Detailed justification based on the resume facts.
+## ABSOLUTE GROUNDING RULES (MOST IMPORTANT — NEVER VIOLATE):
+- You MUST answer ONLY using facts, data, names, numbers, and details that are EXPLICITLY written in the DOCUMENT CONTEXT below.
+- If a piece of information (e.g., years of experience, salary, company names, dates, skills, certifications) is NOT explicitly mentioned in the DOCUMENT CONTEXT, you MUST say "Not mentioned in the document" or "This information is not available in the uploaded document."
+- NEVER guess, assume, infer, or fabricate any facts. NEVER fill in gaps with general knowledge.
+- If the document says the candidate has "no experience" or does not mention any work experience, report exactly that — do NOT invent experience.
+- When quoting numbers, dates, percentages, or statistics, copy them EXACTLY from the document. Do not round, estimate, or approximate.
+- If you are unsure whether something is in the document, err on the side of saying "not explicitly mentioned" rather than guessing.
+
+## RESPONSE QUALITY INSTRUCTIONS:
+
+1. RESUME / CV EVALUATION & SELECTION ANALYSIS:
+   When asked evaluative questions about a CV or Resume (e.g. "Is this candidate worthy?", "Should we hire?", "Evaluate this resume"):
+   - Perform a FACTUAL analysis using ONLY what the document states.
+   - Provide a structured evaluation:
+     * ### Selection Verdict: (Based strictly on document facts)
+     * ### Qualifications & Skills: (ONLY skills explicitly listed in the document)
+     * ### Work Experience: (ONLY experience explicitly stated — if none is mentioned, state "No work experience listed in the document")
+     * ### Education: (ONLY education details from the document)
+     * ### Key Strengths: (Based on document content only)
+     * ### Gaps or Considerations: (What is missing from the document)
+     * ### Recommendation: (Justified by document facts only)
+   - CRITICAL: If the resume does NOT list work experience, do NOT fabricate "2+ years" or any duration. State the facts as they are.
+
+2. GENERAL DOCUMENT Q&A:
+   - Extract and present facts directly from the document passages.
+   - Use bullet points, tables, and clear formatting.
+   - Always cite which part of the document your answer comes from.
 
 ${mermaidInstructions}
 
-3. DEEP ANALYTICAL REASONING: For complex or multi-part questions, analyze all passages thoroughly and synthesize facts into a complete answer.
-
-4. ABSOLUTE ACCURACY: Base your factual statements strictly on facts present in the DOCUMENT CONTEXT.
+4. DEEP ANALYTICAL REASONING: For complex questions, analyze all passages thoroughly and synthesize facts into a complete answer. But NEVER add information that isn't in the document.
 
 DOCUMENT CONTEXT:
 ${context}`
-      : 'You are a world-class AI assistant powered by GPT-4o. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in ```mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use `subgraph SG1["Title"]` ... `end`, use `A -->|Label| B` (never `-->|Label|>`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.';
+      : 'You are a world-class AI assistant. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in ```mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use `subgraph SG1["Title"]` ... `end`, use `A -->|"Label"| B` (never `-->|Label|>`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.';
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
-    // Try OpenAI GPT-4o FIRST (best diagram quality)
+    // Try OpenAI GPT-4o FIRST (best quality)
     if (!useLocalOffline && openaiApiKey) {
       try {
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -222,7 +238,7 @@ ${context}`
               { role: 'user', content: message },
             ],
             stream: true,
-            temperature: 0.2,
+            temperature: 0.1,
             max_tokens: 4096,
           }),
         });
@@ -251,7 +267,7 @@ ${context}`
               { role: 'user', content: message },
             ],
             stream: true,
-            temperature: 0.2,
+            temperature: 0.1,
             max_tokens: 4096,
           }),
         });
@@ -405,7 +421,7 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   });
 
   scoredPassages.sort((a, b) => b.score - a.score);
-  const bestPassages = scoredPassages.filter((p) => p.text.trim().length > 0).slice(0, 5);
+  const bestPassages = scoredPassages.filter((p) => p.text.trim().length > 0).slice(0, 8);
 
   if (bestPassages.length === 0) {
     return `Based on the uploaded document context, no matching details were found for "${query}".`;
@@ -444,35 +460,29 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     queryLower.includes('workflow') ||
     queryLower.includes('architecture') ||
     queryLower.includes('pipeline') ||
-    queryLower.includes('step') ||
     queryLower.includes('draw') ||
-    queryLower.includes('create') ||
-    queryLower.includes('make') ||
     queryLower.includes('chart') ||
     queryLower.includes('visualize') ||
-    queryLower.includes('how') ||
-    queryLower.includes('advantage') ||
-    queryLower.includes('working') ||
-    queryLower.includes('benefit') ||
-    queryLower.includes('overview') ||
     queryLower.includes('map');
 
-  let output = `Based on your uploaded document (**${primarySource}**), here is the answer to your query:\n\n`;
+  let output = `Based on your uploaded document (**${primarySource}**), here is what the document states:\n\n`;
 
   // 1. Sentence/Fact Highlights
   if (extractedSentences.length > 0) {
-    extractedSentences.slice(0, 6).forEach((sentence) => {
+    output += `### Key Information Found in Document\n\n`;
+    extractedSentences.slice(0, 8).forEach((sentence) => {
       output += `• ${sentence}\n`;
     });
     output += `\n`;
   } else {
-    output += `${bestPassages[0].text.slice(0, 300)}...\n\n`;
+    output += `### Document Content Extract\n\n`;
+    output += `${bestPassages[0].text.slice(0, 500)}\n\n`;
   }
 
   // 2. Structured Markdown Table
   if (wantsTable || extractedSentences.length >= 3) {
-    output += `### 📊 Document Intelligence Summary Table\n\n`;
-    output += `| **Key Feature / Topic** | **Document Extracted Information** |\n`;
+    output += `### Document Intelligence Summary Table\n\n`;
+    output += `| **Key Topic** | **Information from Document** |\n`;
     output += `| --- | --- |\n`;
 
     const factPairs = extractedSentences.slice(0, 5);
@@ -500,7 +510,7 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     const step3 = topicList[2] || 'Data Verification Pipeline';
     const step4 = topicList[3] || 'Synthesized Document Insights';
 
-    output += `### Advanced Document Workflow Diagram\n\n`;
+    output += `### Document Workflow Diagram\n\n`;
     output += `\`\`\`mermaid\ngraph TD\n`;
     output += `  subgraph Source_Layer["Document Source"]\n`;
     output += `    A["${cleanSource}"] --> B["${step1}"]\n`;
@@ -516,6 +526,8 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     output += `  end\n`;
     output += `\`\`\`\n\n`;
   }
+
+  output += `\n> **Note:** This answer is extracted directly from your uploaded document content. Only facts present in the document are reported.`;
 
   return output.trim();
 }
@@ -570,6 +582,6 @@ async function getQueryEmbedding(
     return [];
   })();
 
-  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 1000));
+  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 1500));
   return Promise.race([fetchEmbeddingPromise, timeoutPromise]);
 }

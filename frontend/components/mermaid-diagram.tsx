@@ -78,7 +78,6 @@ function sanitizeMermaidCode(raw: string): string {
     l = l.replace(/;+\s*$/g, '');
 
     // FIX PIPE LABELS: Replace `&` with `and`, double quote labels, strip trailing `>`
-    // Converts `-->|Label & Info|> B` or `-->|Label| B` -> `-->|"Label and Info"| B`
     l = l.replace(/-->\s*\|([^|\n]+)\|(?:>|\s*>)?/g, (m, label) => {
       const cleanLabel = label
         .replace(/["\\]/g, '')
@@ -87,13 +86,13 @@ function sanitizeMermaidCode(raw: string): string {
       return `-->|"${cleanLabel}"| `;
     });
 
-    // FIX SUBGRAPH HEADER BUG: `subgraph Title with spaces` -> `subgraph SG1["Title with spaces"]`
+    // FIX SUBGRAPH HEADER BUG
     if (l.toLowerCase().startsWith('subgraph')) {
       openSubgraphs++;
       const matchWithQuotes = l.match(/^subgraph\s+([A-Za-z0-9_]+)\s*\["([^"]+)"\]/i);
       const matchSingleWord = l.match(/^subgraph\s+([A-Za-z0-9_]+)\s*$/i);
       if (!matchWithQuotes && !matchSingleWord) {
-        const title = l.replace(/^subgraph\s+/i, '').replace(/["\[\]]/g, '').trim();
+        const title = l.replace(/^subgraph\s+/i, '').replace(/["[\]]/g, '').trim();
         const sgId = `SG_${sgCounter++}`;
         return `subgraph ${sgId}["${title || 'Phase'}"]`;
       }
@@ -103,18 +102,18 @@ function sanitizeMermaidCode(raw: string): string {
       if (openSubgraphs > 0) openSubgraphs--;
     }
 
-    // Fix invalid arrows: `-->>`, `->>>`, `--->`
+    // Fix invalid arrows
     l = l.replace(/\s*-->>\s*/g, ' --> ');
     l = l.replace(/\s*->>>\s*/g, ' --> ');
     l = l.replace(/\s*--->\s*/g, ' --> ');
 
-    // Fix node IDs with spaces: `Phase 1["Label"]` -> `Phase_1["Label"]`
+    // Fix node IDs with spaces
     l = l.replace(/^([A-Za-z0-9_\s]+)\["([^"]+)"\]/g, (m, id, label) => {
       const cleanId = id.trim().replace(/\s+/g, '_');
       return `${cleanId}["${label}"]`;
     });
 
-    // Fix unquoted node labels and deduplicate repeated node definitions: `A[Label text]` -> `A["Label text"]`
+    // Fix unquoted node labels
     l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
       const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
       if (definedNodes.has(id)) {
@@ -124,7 +123,7 @@ function sanitizeMermaidCode(raw: string): string {
       return `${id}["${cleanLabel}"]`;
     });
 
-    // Fix decision node labels: `C{Condition text}` -> `C{"Condition text"}`
+    // Fix decision node labels
     l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
       const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
       if (definedNodes.has(id)) {
@@ -151,6 +150,57 @@ function sanitizeMermaidCode(raw: string): string {
   return lines.filter(Boolean).join('\n');
 }
 
+/**
+ * Aggressively remove ALL Mermaid error nodes from the entire document.
+ * Mermaid v11 uses dynamic IDs like `d1mermaid-error-abc123`, so we use
+ * wildcard attribute selectors to catch every variant.
+ */
+function purgeAllMermaidErrors(): void {
+  if (typeof document === 'undefined') return;
+  try {
+    // Wildcard: any element whose ID contains "mermaid-error"
+    document.querySelectorAll('[id*="mermaid-error"]').forEach((n) => n.remove());
+    // Wildcard: any element whose ID contains "error" inside a mermaid parent
+    document.querySelectorAll('[id*="mermaid"] .error-icon').forEach((n) => n.remove());
+    // Class-based error elements
+    document.querySelectorAll('.error-icon, .mermaid-error').forEach((n) => n.remove());
+    // Nuclear: find any body-level divs with "Syntax error in text" content
+    document.querySelectorAll('body > div, body > svg, body > pre').forEach((el) => {
+      const text = el.textContent || '';
+      if (
+        text.includes('Syntax error in text') ||
+        text.includes('mermaid version') ||
+        (el.id && el.id.includes('mermaid') && el.id.includes('error'))
+      ) {
+        el.remove();
+      }
+    });
+    // Remove any orphaned SVG elements left by failed mermaid.render()
+    document.querySelectorAll('body > svg[id*="mermaid"]').forEach((el) => {
+      el.remove();
+    });
+  } catch {
+    // Silently ignore DOM errors
+  }
+}
+
+/**
+ * Create a hidden off-screen container for mermaid rendering.
+ * Prevents error nodes from appearing in the visible viewport.
+ */
+function getOrCreateHiddenContainer(): HTMLDivElement {
+  const CONTAINER_ID = '__mermaid_render_sandbox__';
+  let container = document.getElementById(CONTAINER_ID) as HTMLDivElement | null;
+  if (!container) {
+    container = document.createElement('div');
+    container.id = CONTAINER_ID;
+    container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;';
+    document.body.appendChild(container);
+  }
+  container.innerHTML = '';
+  return container;
+}
+
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>('');
@@ -158,21 +208,6 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
-
-  const cleanDOMErrorNodes = useCallback(() => {
-    if (typeof document === 'undefined') return;
-    try {
-      document.querySelectorAll('.error-icon, #dmermaid-error, #mermaid-error').forEach((n) => n.remove());
-      document.querySelectorAll('div').forEach((div) => {
-        if (
-          (div.id && (div.id === 'dmermaid-error' || div.id === 'mermaid-error')) ||
-          (typeof div.className === 'string' && div.className.includes('error-icon'))
-        ) {
-          div.remove();
-        }
-      });
-    } catch {}
-  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -201,23 +236,24 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
         let sanitized = sanitizeMermaidCode(chart);
         if (!sanitized || sanitized.length < 10) {
-          cleanDOMErrorNodes();
+          purgeAllMermaidErrors();
           if (isMounted) setRenderState('error');
           return;
         }
 
         // Multi-tier progressive fallback parser
+        // Each tier cleans up error nodes IMMEDIATELY after failure
         let parseSuccess = false;
 
         // Tier 1: Primary parse with sanitized code
         try {
           await mermaid.parse(sanitized);
           parseSuccess = true;
-        } catch (e1) {
-          console.warn('[Mermaid] Tier 1 parse failed. Attempting Tier 2 (Strip style/classDef & replace reserved chars)...');
+        } catch {
+          purgeAllMermaidErrors();
         }
 
-        // Tier 2: Strip style/classDef directives, replace reserved ampersands
+        // Tier 2: Strip style/classDef, replace ampersands
         if (!parseSuccess) {
           try {
             sanitized = sanitized
@@ -225,12 +261,12 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
               .replace(/&/g, 'and');
             await mermaid.parse(sanitized);
             parseSuccess = true;
-          } catch (e2) {
-            console.warn('[Mermaid] Tier 2 parse failed. Attempting Tier 3 (Flatten subgraphs)...');
+          } catch {
+            purgeAllMermaidErrors();
           }
         }
 
-        // Tier 3: Flatten subgraphs (strip subgraph and end lines)
+        // Tier 3: Flatten subgraphs
         if (!parseSuccess) {
           try {
             sanitized = sanitized.replace(/^\s*(subgraph|end).*/gm, '').trim();
@@ -239,37 +275,53 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
             }
             await mermaid.parse(sanitized);
             parseSuccess = true;
-          } catch (e3) {
-            console.warn('[Mermaid] Tier 3 parse failed. Attempting Tier 4 (Strip all pipe labels)...');
+          } catch {
+            purgeAllMermaidErrors();
           }
         }
 
-        // Tier 4: Strip all pipe labels down to simple arrows (A --> B)
+        // Tier 4: Strip all pipe labels
         if (!parseSuccess) {
           try {
             sanitized = sanitized.replace(/-->\s*\|[^|\n]+\|/g, '-->');
             await mermaid.parse(sanitized);
             parseSuccess = true;
-          } catch (e4) {
-            console.error('[Mermaid] All 4 parse tiers failed for chart:', chart);
+          } catch {
+            purgeAllMermaidErrors();
           }
         }
 
-        const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;
-        const { svg } = await mermaid.render(uniqueId, sanitized);
+        if (!parseSuccess) {
+          purgeAllMermaidErrors();
+          if (isMounted) setRenderState('error');
+          return;
+        }
 
-        cleanDOMErrorNodes();
+        // Render into hidden off-screen container to prevent error nodes in viewport
+        const hiddenContainer = getOrCreateHiddenContainer();
+        const uniqueId = `mermaid_${Date.now()}_${idCounter++}`;
+
+        let svg = '';
+        try {
+          const result = await mermaid.render(uniqueId, sanitized, hiddenContainer);
+          svg = result.svg;
+        } catch {
+          purgeAllMermaidErrors();
+          hiddenContainer.innerHTML = '';
+        }
+
+        // Final cleanup
+        purgeAllMermaidErrors();
 
         if (isMounted && svg) {
           setSvgContent(svg);
           setRenderState('success');
         } else {
-          cleanDOMErrorNodes();
           if (isMounted) setRenderState('error');
         }
       } catch (err) {
         console.error('[MermaidDiagram] Final render failure:', err);
-        cleanDOMErrorNodes();
+        purgeAllMermaidErrors();
         if (isMounted) {
           setSvgContent('');
           setRenderState('error');
@@ -279,14 +331,33 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
     if (chart && chart.trim().length > 5) {
       setRenderState('loading');
-      renderDiagram();
+      // Small delay to batch rapid re-renders during streaming
+      const timer = setTimeout(() => {
+        renderDiagram();
+      }, 100);
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+        purgeAllMermaidErrors();
+      };
     }
 
     return () => {
       isMounted = false;
-      cleanDOMErrorNodes();
+      purgeAllMermaidErrors();
     };
-  }, [chart, cleanDOMErrorNodes]);
+  }, [chart]);
+
+  // Periodic cleanup: catch any stray error nodes that appear after render
+  useEffect(() => {
+    const interval = setInterval(() => {
+      purgeAllMermaidErrors();
+    }, 1000);
+    return () => {
+      clearInterval(interval);
+      purgeAllMermaidErrors();
+    };
+  }, []);
 
   const handleZoomIn = () => setZoomLevel((prev) => Math.min(prev + 0.25, 2.5));
   const handleZoomOut = () => setZoomLevel((prev) => Math.max(prev - 0.25, 0.5));
@@ -326,27 +397,27 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     );
   }
 
-  // Error / fallback: show clear error state with syntax
+  // Error / fallback: show diagram syntax in a soft amber box (not alarming red)
   if (renderState === 'error' || !svgContent) {
     const cleanedCode = chart.replace(/```(mermaid)?/gi, '').trim();
     return (
-      <div className="my-4 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 p-4 shadow-sm">
+      <div className="my-4 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="text-sm font-bold text-red-700 dark:text-red-400">Diagram couldn&apos;t be rendered</h3>
-            <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-0.5">Mermaid syntax appears invalid.</p>
+            <h3 className="text-sm font-bold text-amber-700 dark:text-amber-400">Diagram Preview (Raw Syntax)</h3>
+            <p className="text-xs text-amber-600/80 dark:text-amber-400/70 mt-0.5">This diagram syntax could not be rendered visually. You can copy the code below.</p>
           </div>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 text-[11px] text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 gap-1"
+            className="h-7 text-[11px] text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 gap-1"
             onClick={handleCopyCode}
           >
             {copiedCode ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
             {copiedCode ? 'Copied' : 'Copy Code'}
           </Button>
         </div>
-        <pre className="text-xs font-mono text-red-900 dark:text-red-200 bg-red-100/60 dark:bg-red-950/60 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{cleanedCode}</pre>
+        <pre className="text-xs font-mono text-amber-900 dark:text-amber-200 bg-amber-100/60 dark:bg-amber-950/60 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{cleanedCode}</pre>
       </div>
     );
   }
