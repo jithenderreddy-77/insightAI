@@ -94,6 +94,21 @@ export function VoiceAssistantModal({
     }, 300);
   }, []);
 
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+
+  const safeOpenUrl = useCallback((url: string) => {
+    setPendingUrl(url);
+    try {
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        // Fallback to direct location assignment if popup is blocked by browser
+        window.location.href = url;
+      }
+    } catch {
+      window.location.href = url;
+    }
+  }, []);
+
   // Process voice input and IMMEDIATELY execute actions
   const processVoiceCommand = useCallback(
     async (spokenTranscript: string) => {
@@ -103,6 +118,7 @@ export function VoiceAssistantModal({
 
       setAssistantState('thinking');
       setActionNotice(null);
+      setPendingUrl(null);
       setCommandLog((prev) => [...prev.slice(-4), spokenTranscript]);
 
       // Stop mic while processing to avoid pickup of TTS audio
@@ -123,9 +139,8 @@ export function VoiceAssistantModal({
 
         // EXECUTE ACTIONS IMMEDIATELY (before TTS) to avoid popup blocker
         if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
-          setActionNotice(`✅ Opened: ${data.targetUrl}`);
-          // Open IMMEDIATELY — synchronous with user gesture chain
-          window.open(data.targetUrl, '_blank');
+          setActionNotice(`✅ Launching: ${data.targetUrl}`);
+          safeOpenUrl(data.targetUrl);
           speakVoiceResponse(speech);
         } else if (data.actionType === 'APP_ACTION') {
           const appAct = data.appAction;
@@ -442,6 +457,16 @@ export function VoiceAssistantModal({
                 <Zap className="w-3.5 h-3.5" />
                 {actionNotice}
               </div>
+            )}
+
+            {pendingUrl && (
+              <button
+                onClick={() => window.open(pendingUrl, '_blank')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 text-white font-extrabold text-xs shadow-lg transition-transform hover:scale-105 animate-bounce"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Click Here to Launch ({pendingUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 25)})</span>
+              </button>
             )}
 
             {!recognitionAvailable && (

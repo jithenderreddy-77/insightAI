@@ -185,6 +185,54 @@ function matchDirectPattern(query: string, hasActiveDocs: boolean) {
     };
   }
 
+  // WhatsApp Messaging Automation (Deep Link)
+  if (query.includes('whatsapp') && (query.includes('message') || query.includes('send') || query.includes('saying') || query.includes('text'))) {
+    let msg = query
+      .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
+      .replace(/^open\s+whatsapp\s+(and\s+)?(send\s+)?/gi, '')
+      .replace(/\s+on\s+whatsapp$/gi, '')
+      .trim();
+    if (!msg || msg === 'whatsapp') {
+      return {
+        spokenResponse: 'Opening WhatsApp Web.',
+        actionType: 'OPEN_WEBSITE',
+        targetUrl: 'https://web.whatsapp.com',
+        searchQuery: '',
+      };
+    }
+    const encodedMsg = encodeURIComponent(msg);
+    return {
+      spokenResponse: `Opening WhatsApp to send: "${msg}".`,
+      actionType: 'OPEN_WEBSITE',
+      targetUrl: `https://web.whatsapp.com/send?text=${encodedMsg}`,
+      searchQuery: msg,
+    };
+  }
+
+  // Gmail Compose Messaging Automation (Deep Link)
+  if ((query.includes('gmail') || query.includes('email')) && (query.includes('send') || query.includes('compose') || query.includes('write') || query.includes('saying'))) {
+    let msg = query
+      .replace(/^(send\s+)?(a\s+)?(gmail|email)\s+(message\s+)?(saying\s+)?/gi, '')
+      .replace(/^compose\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
+      .replace(/^write\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
+      .trim();
+    if (!msg || msg === 'gmail' || msg === 'email') {
+      return {
+        spokenResponse: 'Opening Gmail compose window.',
+        actionType: 'OPEN_WEBSITE',
+        targetUrl: 'https://mail.google.com/mail/?view=cm&fs=1',
+        searchQuery: '',
+      };
+    }
+    const encodedMsg = encodeURIComponent(msg);
+    return {
+      spokenResponse: `Opening Gmail to compose message: "${msg}".`,
+      actionType: 'OPEN_WEBSITE',
+      targetUrl: `https://mail.google.com/mail/?view=cm&fs=1&body=${encodedMsg}`,
+      searchQuery: msg,
+    };
+  }
+
   // Common Popular Websites — Check FIRST before YouTube search
   const websiteMappings: Record<string, string> = {
     youtube: 'https://www.youtube.com',
