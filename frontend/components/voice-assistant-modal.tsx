@@ -46,7 +46,6 @@ export function VoiceAssistantModal({
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
-  const automationTabRef = useRef<Window | null>(null);
   const hasGreetedRef = useRef(false);
 
   // Initialize orb position (bottom-right)
@@ -100,22 +99,30 @@ export function VoiceAssistantModal({
     };
   }, [handleDragMove, handleDragEnd]);
 
-  // --- OPEN URL INSTANTLY (no "Click Here" button) ---
-  const safeOpenUrl = useCallback((url: string) => {
+  // --- OPEN NATIVE APPS & WEBSITES IN NEW TABS (Preserves Current Session Tab) ---
+  const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string) => {
     try {
-      if (automationTabRef.current && !automationTabRef.current.closed) {
-        automationTabRef.current.location.href = url;
-        try { automationTabRef.current.focus(); } catch {}
-      } else {
-        const win = window.open(url, 'insight_automation_tab');
-        if (win) {
-          automationTabRef.current = win;
-        } else {
-          window.location.assign(url);
-        }
+      // 1. Trigger Native Application Protocol Scheme (Opens installed app on macOS/Windows/iOS/Android)
+      if (nativeScheme) {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = nativeScheme;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          try { document.body.removeChild(iframe); } catch {}
+        }, 1500);
       }
-    } catch {
-      window.location.assign(url);
+
+      // 2. Open Web App in NEW CLEAN TAB (_blank) — NEVER replaces active Insight AI tab session
+      const win = window.open(webUrl, '_blank');
+      if (win) {
+        try { win.focus(); } catch {}
+      } else {
+        // Backup target window if browser popup blocker restricts un-named _blank
+        window.open(webUrl, 'insight_app_launch');
+      }
+    } catch (err) {
+      console.error('Error launching app/url:', err);
     }
   }, []);
 
@@ -167,7 +174,7 @@ export function VoiceAssistantModal({
     }, 200);
   }, []);
 
-  // --- INSTANT CLIENT-SIDE FAST-PATH AUTOMATION ---
+  // --- 0-TOKEN CLIENT-SIDE FAST-PATH AUTOMATION ---
   const matchClientInstantAction = useCallback(
     (query: string): boolean => {
       const q = query.toLowerCase().replace(/[.,!?;:]/g, '').replace(/\s+/g, ' ').trim();
@@ -215,69 +222,77 @@ export function VoiceAssistantModal({
       // Minimize
       if (q === 'minimize' || q === 'go to background' || q === 'hide') {
         setIsMinimized(true);
-        speakVoiceResponse('Going to background. Tap the star to open me.');
+        speakVoiceResponse('Going to background.');
         return true;
       }
 
-      // WhatsApp Messaging
+      // WhatsApp Messaging (Native App + Web Deep Link)
       if (q.includes('whatsapp') && (q.includes('message') || q.includes('send') || q.includes('saying') || q.includes('text'))) {
         let msg = q
           .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
           .replace(/^open\s+whatsapp\s+(and\s+)?(send\s+)?/gi, '')
           .replace(/\s+on\s+whatsapp$/gi, '')
           .trim();
-        const url = msg && msg !== 'whatsapp'
+        const webUrl = msg && msg !== 'whatsapp'
           ? `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`
           : 'https://web.whatsapp.com';
-        setActionNotice(`✅ WhatsApp: ${msg || 'Opened'}`);
-        safeOpenUrl(url);
-        speakVoiceResponse(msg ? `Opening WhatsApp to send message.` : 'Opening WhatsApp.');
+        const nativeScheme = msg && msg !== 'whatsapp'
+          ? `whatsapp://send?text=${encodeURIComponent(msg)}`
+          : 'whatsapp://';
+
+        setActionNotice(`✅ WhatsApp App: ${msg || 'Opened'}`);
+        safeOpenUrl(webUrl, nativeScheme);
+        speakVoiceResponse(msg ? `Opening WhatsApp app to send message.` : 'Opening WhatsApp app.');
         return true;
       }
 
-      // Gmail Compose
+      // Gmail Compose (Native Mail App + Web Deep Link)
       if ((q.includes('gmail') || q.includes('email')) && (q.includes('send') || q.includes('compose') || q.includes('write') || q.includes('saying'))) {
         let msg = q
           .replace(/^(send\s+)?(a\s+)?(gmail|email)\s+(message\s+)?(saying\s+)?/gi, '')
           .replace(/^compose\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
           .replace(/^write\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
           .trim();
-        const url = msg && msg !== 'gmail' && msg !== 'email'
+        const webUrl = msg && msg !== 'gmail' && msg !== 'email'
           ? `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent(msg)}`
           : 'https://mail.google.com/mail/?view=cm&fs=1';
-        setActionNotice(`✅ Gmail Compose opened`);
-        safeOpenUrl(url);
-        speakVoiceResponse('Opening Gmail compose window.');
+        const nativeScheme = msg ? `mailto:?body=${encodeURIComponent(msg)}` : 'googlegmail://';
+
+        setActionNotice(`✅ Gmail App opened`);
+        safeOpenUrl(webUrl, nativeScheme);
+        speakVoiceResponse('Opening Gmail app.');
         return true;
       }
 
-      // Popular Websites Direct Open
-      const sites: Record<string, string> = {
-        youtube: 'https://www.youtube.com',
-        github: 'https://github.com',
-        twitter: 'https://x.com',
-        x: 'https://x.com',
-        wikipedia: 'https://wikipedia.org',
-        linkedin: 'https://linkedin.com',
-        reddit: 'https://reddit.com',
-        amazon: 'https://amazon.com',
-        netflix: 'https://netflix.com',
-        spotify: 'https://open.spotify.com',
-        gmail: 'https://mail.google.com',
-        whatsapp: 'https://web.whatsapp.com',
-        instagram: 'https://instagram.com',
-        chatgpt: 'https://chat.openai.com',
-        facebook: 'https://facebook.com',
-        google: 'https://www.google.com',
-        stackoverflow: 'https://stackoverflow.com',
+      // Installed Native App Protocol Schemes + Web Fallbacks
+      const nativeAppRegistry: Record<string, { web: string; native: string }> = {
+        youtube: { web: 'https://www.youtube.com', native: 'vnd.youtube://' },
+        whatsapp: { web: 'https://web.whatsapp.com', native: 'whatsapp://' },
+        spotify: { web: 'https://open.spotify.com', native: 'spotify://' },
+        gmail: { web: 'https://mail.google.com', native: 'googlegmail://' },
+        instagram: { web: 'https://instagram.com', native: 'instagram://' },
+        twitter: { web: 'https://x.com', native: 'twitter://' },
+        x: { web: 'https://x.com', native: 'twitter://' },
+        telegram: { web: 'https://web.telegram.org', native: 'tg://' },
+        discord: { web: 'https://discord.com/app', native: 'discord://' },
+        zoom: { web: 'https://zoom.us', native: 'zoomus://' },
+        github: { web: 'https://github.com', native: 'https://github.com' },
+        linkedin: { web: 'https://linkedin.com', native: 'linkedin://' },
+        reddit: { web: 'https://reddit.com', native: 'reddit://' },
+        amazon: { web: 'https://amazon.com', native: 'amazon://' },
+        netflix: { web: 'https://netflix.com', native: 'nflx://' },
+        chatgpt: { web: 'https://chat.openai.com', native: 'https://chat.openai.com' },
+        facebook: { web: 'https://facebook.com', native: 'fb://' },
+        google: { web: 'https://www.google.com', native: 'https://www.google.com' },
+        stackoverflow: { web: 'https://stackoverflow.com', native: 'https://stackoverflow.com' },
       };
 
-      for (const [key, url] of Object.entries(sites)) {
-        const regex = new RegExp(`^(open|go to|launch|open up)?\\s*${key}\\s*$`, 'i');
+      for (const [key, app] of Object.entries(nativeAppRegistry)) {
+        const regex = new RegExp(`^(open|launch|go to|open up)?\\s*${key}\\s*(app)?$`, 'i');
         if (regex.test(q)) {
-          setActionNotice(`✅ ${key.charAt(0).toUpperCase() + key.slice(1)} opened`);
-          safeOpenUrl(url);
-          speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)}.`);
+          setActionNotice(`✅ Opening ${key.toUpperCase()} App`);
+          safeOpenUrl(app.web, app.native);
+          speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)} app.`);
           return true;
         }
       }
@@ -291,12 +306,12 @@ export function VoiceAssistantModal({
           .replace(/\s+on\s+youtube$/gi, '').replace(/\byoutube\b/gi, '')
           .trim();
         if (!search) {
-          setActionNotice('✅ YouTube opened');
-          safeOpenUrl('https://www.youtube.com');
+          setActionNotice('✅ YouTube App opened');
+          safeOpenUrl('https://www.youtube.com', 'vnd.youtube://');
           speakVoiceResponse('Opening YouTube.');
         } else {
           setActionNotice(`✅ YouTube: "${search}"`);
-          safeOpenUrl(`https://www.youtube.com/results?search_query=${encodeURIComponent(search)}`);
+          safeOpenUrl(`https://www.youtube.com/results?search_query=${encodeURIComponent(search)}`, `vnd.youtube://results?search_query=${encodeURIComponent(search)}`);
           speakVoiceResponse(`Searching YouTube for ${search}.`);
         }
         return true;
@@ -321,7 +336,7 @@ export function VoiceAssistantModal({
 
       // Generic "open X.com" fallback
       if (q.startsWith('open ') || q.startsWith('go to ')) {
-        const target = q.replace(/^(open|go to)\s+/g, '').trim();
+        const target = q.replace(/^(open|go to)\s+/g, '').replace(/\s+app$/gi, '').trim();
         if (target.includes('.') && !target.includes(' ')) {
           const url = target.startsWith('http') ? target : `https://${target}`;
           setActionNotice(`✅ Opening ${target}`);
@@ -329,7 +344,6 @@ export function VoiceAssistantModal({
           speakVoiceResponse(`Opening ${target}.`);
           return true;
         }
-        // Treat as Google search
         const encoded = encodeURIComponent(target);
         setActionNotice(`✅ Searching: ${target}`);
         safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
@@ -356,7 +370,7 @@ export function VoiceAssistantModal({
       try { recognitionRef.current?.stop(); } catch {}
 
       try {
-        // Fast-path check (0ms latency)
+        // Fast-path check (0ms latency, 0 API Tokens consumed!)
         const handled = matchClientInstantAction(spokenTranscript);
         if (handled) return;
 
@@ -504,7 +518,7 @@ export function VoiceAssistantModal({
 
   if (!isOpen) return null;
 
-  // --- MINIMIZED FLOATING DRAGGABLE ORB ---
+  // --- MINIMIZED FLOATING DRAGGABLE LOGO ORB ---
   if (isMinimized) {
     return (
       <div
@@ -593,7 +607,7 @@ export function VoiceAssistantModal({
               {assistantState === 'waiting' && '✅ Ready — Say next command'}
               {assistantState === 'thinking' && '⚡ Executing...'}
               {assistantState === 'speaking' && '🔊 Speaking...'}
-              {assistantState === 'idle' && 'Tap Orb to Activate'}
+              {assistantState === 'idle' && 'Tap Logo to Activate'}
             </span>
 
             {transcript && (
