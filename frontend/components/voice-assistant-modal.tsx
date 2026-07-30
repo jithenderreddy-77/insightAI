@@ -32,12 +32,27 @@ export function VoiceAssistantModal({
   const [transcript, setTranscript] = useState('');
   const [spokenText, setSpokenText] = useState('');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const [recognitionAvailable, setRecognitionAvailable] = useState<boolean>(true);
   const [commandLog, setCommandLog] = useState<string[]>([]);
 
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
+
+  // Popup-blocker safe tab opener
+  const safeOpenUrl = useCallback((url: string) => {
+    setPendingUrl(url);
+    try {
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        // Fallback to direct location assignment if popup is blocked by browser security
+        window.location.href = url;
+      }
+    } catch {
+      window.location.href = url;
+    }
+  }, []);
 
   // Text-to-Speech
   const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
@@ -62,7 +77,6 @@ export function VoiceAssistantModal({
 
     utterance.onend = () => {
       if (onComplete) onComplete();
-      // After speaking, resume continuous listening
       restartContinuousListening();
     };
     utterance.onerror = () => {
@@ -81,35 +95,119 @@ export function VoiceAssistantModal({
     setAssistantState('waiting');
     setTranscript('');
     setSpokenText('');
-    setActionNotice(null);
 
-    // Small delay to let TTS fully stop before starting mic
     setTimeout(() => {
       if (!shouldRestartRef.current) return;
       try {
         recognitionRef.current.start();
-      } catch {
-        // Already running, that's fine
-      }
+      } catch {}
     }, 300);
   }, []);
 
-  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  // Instant Client-Side Fast-Path Automation (0ms latency before network fetch)
+  const matchClientInstantAction = useCallback(
+    (query: string) => {
+      const q = query.toLowerCase().trim();
 
-  const safeOpenUrl = useCallback((url: string) => {
-    setPendingUrl(url);
-    try {
-      const win = window.open(url, '_blank', 'noopener,noreferrer');
-      if (!win || win.closed || typeof win.closed === 'undefined') {
-        // Fallback to direct location assignment if popup is blocked by browser
-        window.location.href = url;
+      // App Actions
+      if (q.includes('upload') || q.includes('add file') || q.includes('add pdf') || q.includes('select document')) {
+        setActionNotice('✅ Opening file picker...');
+        onTriggerUpload();
+        speakVoiceResponse('Opening document upload picker.', () => onClose());
+        return true;
       }
-    } catch {
-      window.location.href = url;
-    }
-  }, []);
+      if (q.includes('new chat') || q.includes('start chat') || q.includes('clear chat') || q.includes('reset session')) {
+        setActionNotice('✅ Starting new chat...');
+        onNewChat();
+        speakVoiceResponse('Starting a new chat session.', () => onClose());
+        return true;
+      }
+      if (q.includes('history') || q.includes('past chat') || q.includes('saved chat')) {
+        setActionNotice('✅ Opening history...');
+        onOpenHistory();
+        speakVoiceResponse('Opening your chat and file history.', () => onClose());
+        return true;
+      }
+      if (q.includes('sign in') || q.includes('login') || q.includes('register') || q.includes('create account')) {
+        setActionNotice('✅ Opening sign in...');
+        onOpenAuth();
+        speakVoiceResponse('Opening sign in window.', () => onClose());
+        return true;
+      }
+      if (q.includes('install app') || q.includes('download app')) {
+        setActionNotice('✅ App installer launched');
+        onInstallApp();
+        speakVoiceResponse('Launching app installer.', () => onClose());
+        return true;
+      }
 
-  // Process voice input and IMMEDIATELY execute actions
+      // WhatsApp Messaging
+      if (q.includes('whatsapp') && (q.includes('message') || q.includes('send') || q.includes('saying') || q.includes('text'))) {
+        let msg = q
+          .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
+          .replace(/^open\s+whatsapp\s+(and\s+)?(send\s+)?/gi, '')
+          .replace(/\s+on\s+whatsapp$/gi, '')
+          .trim();
+        const url = msg && msg !== 'whatsapp'
+          ? `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`
+          : 'https://web.whatsapp.com';
+        setActionNotice(`✅ Launching WhatsApp: ${msg || 'Web'}`);
+        safeOpenUrl(url);
+        speakVoiceResponse(`Opening WhatsApp ${msg ? 'to send message' : ''}`);
+        return true;
+      }
+
+      // Gmail Compose
+      if ((q.includes('gmail') || q.includes('email')) && (q.includes('send') || q.includes('compose') || q.includes('write') || q.includes('saying'))) {
+        let msg = q
+          .replace(/^(send\s+)?(a\s+)?(gmail|email)\s+(message\s+)?(saying\s+)?/gi, '')
+          .replace(/^compose\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
+          .replace(/^write\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
+          .trim();
+        const url = msg && msg !== 'gmail' && msg !== 'email'
+          ? `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent(msg)}`
+          : 'https://mail.google.com/mail/?view=cm&fs=1';
+        setActionNotice(`✅ Launching Gmail Compose`);
+        safeOpenUrl(url);
+        speakVoiceResponse('Opening Gmail compose window.');
+        return true;
+      }
+
+      // Popular Websites Direct Open
+      const sites: Record<string, string> = {
+        youtube: 'https://www.youtube.com',
+        github: 'https://github.com',
+        twitter: 'https://x.com',
+        x: 'https://x.com',
+        wikipedia: 'https://wikipedia.org',
+        linkedin: 'https://linkedin.com',
+        reddit: 'https://reddit.com',
+        amazon: 'https://amazon.com',
+        netflix: 'https://netflix.com',
+        spotify: 'https://open.spotify.com',
+        gmail: 'https://mail.google.com',
+        whatsapp: 'https://web.whatsapp.com',
+        instagram: 'https://instagram.com',
+        chatgpt: 'https://chat.openai.com',
+        facebook: 'https://facebook.com',
+        google: 'https://www.google.com',
+      };
+
+      for (const [key, url] of Object.entries(sites)) {
+        if (q === `open ${key}` || q === key || q === `go to ${key}` || q === `open up ${key}` || q === `launch ${key}`) {
+          setActionNotice(`✅ Opening ${key.toUpperCase()}`);
+          safeOpenUrl(url);
+          speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)}.`);
+          return true;
+        }
+      }
+
+      return false;
+    },
+    [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose]
+  );
+
+  // Process voice input and run automation actions
   const processVoiceCommand = useCallback(
     async (spokenTranscript: string) => {
       if (isProcessingRef.current) return;
@@ -121,9 +219,14 @@ export function VoiceAssistantModal({
       setPendingUrl(null);
       setCommandLog((prev) => [...prev.slice(-4), spokenTranscript]);
 
-      // Stop mic while processing to avoid pickup of TTS audio
+      // Stop mic while processing
       try { recognitionRef.current?.stop(); } catch {}
 
+      // Fast-path instant execution check (0ms latency!)
+      const handledInstantly = matchClientInstantAction(spokenTranscript);
+      if (handledInstantly) return;
+
+      // Full AI Intent Parser for complex queries / composition
       try {
         const response = await fetch('/api/voice-assistant', {
           method: 'POST',
@@ -137,7 +240,6 @@ export function VoiceAssistantModal({
         const data = await response.json();
         const speech = data.spokenResponse || 'Done.';
 
-        // EXECUTE ACTIONS IMMEDIATELY (before TTS) to avoid popup blocker
         if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
           setActionNotice(`✅ Launching: ${data.targetUrl}`);
           safeOpenUrl(data.targetUrl);
@@ -179,10 +281,10 @@ export function VoiceAssistantModal({
         speakVoiceResponse('Sorry, there was an issue. Please try again.');
       }
     },
-    [hasActiveDocuments, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onClose]
+    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onClose]
   );
 
-  // Initialize Speech Recognition with CONTINUOUS listening + "Ok Insight" wake word
+  // Initialize Speech Recognition (Mobile & Desktop Compatible)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -192,8 +294,11 @@ export function VoiceAssistantModal({
       return;
     }
 
+    const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const rec = new SpeechRecognitionAPI();
-    rec.continuous = true;
+
+    // iOS Safari requires continuous = false to prevent crashes/freezes
+    rec.continuous = !isMobileDevice;
     rec.interimResults = true;
     rec.lang = 'en-US';
 
@@ -218,14 +323,12 @@ export function VoiceAssistantModal({
         }
       }
 
-      // Show real-time transcript
       setTranscript(finalText || interimText);
 
       if (finalText) {
         const cleaned = finalText.trim();
         if (!cleaned || cleaned.length < 2) return;
 
-        // Check for "Ok Insight" / "Hey Insight" wake word prefix
         const wakeWordPatterns = [
           /^(ok|okay|hey|hi)\s+insight\s*/i,
           /^insight\s*/i,
@@ -242,14 +345,12 @@ export function VoiceAssistantModal({
           }
         }
 
-        // If we got a wake word with no command after it, just acknowledge
         if (hasWakeWord && !command) {
           setTranscript('Listening for your command...');
           speakVoiceResponse("I'm listening. What would you like me to do?");
           return;
         }
 
-        // Execute any speech that is a clear command (with OR without wake word)
         if (command.length > 1) {
           processVoiceCommand(command);
         }
@@ -257,20 +358,19 @@ export function VoiceAssistantModal({
     };
 
     rec.onerror = (event: any) => {
-      console.log('[SpeechRecognition] Error:', event.error);
+      console.log('[SpeechRecognition] Mobile/Desktop Notice:', event.error);
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         setRecognitionAvailable(false);
         setAssistantState('idle');
       }
-      // For other errors (no-speech, network), auto-restart
     };
 
     rec.onend = () => {
-      // Auto-restart continuous listening if modal is still open and not processing
-      if (!isProcessingRef.current) {
-        try {
-          rec.start();
-        } catch {}
+      // Auto-restart loop for mobile & desktop
+      if (!isProcessingRef.current && shouldRestartRef.current) {
+        setTimeout(() => {
+          try { rec.start(); } catch {}
+        }, 300);
       }
     };
 
@@ -291,13 +391,13 @@ export function VoiceAssistantModal({
       setTranscript('');
       setSpokenText('');
       setActionNotice(null);
+      setPendingUrl(null);
       setCommandLog([]);
 
       setTimeout(() => {
         try { recognitionRef.current.start(); } catch {}
       }, 200);
 
-      // Welcome voice greeting
       setTimeout(() => {
         speakVoiceResponse("Hi! I'm Insight Voice. Say a command or say Ok Insight to get started.");
       }, 500);
@@ -341,9 +441,9 @@ export function VoiceAssistantModal({
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-cyan-400 animate-pulse" />
             <span className="font-extrabold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
-              INSIGHT VOICE
+              INSIGHT VOICE (COMET AI)
             </span>
-            <span className="text-[10px] text-slate-500 font-medium">Say &quot;Ok Insight&quot; anytime</span>
+            <span className="text-[10px] text-slate-500 font-medium hidden sm:inline">Say &quot;Ok Insight&quot;</span>
           </div>
           <Button
             variant="ghost"
@@ -364,7 +464,8 @@ export function VoiceAssistantModal({
           <div
             className="relative cursor-pointer group flex items-center justify-center"
             onClick={toggleListening}
-            title="Click to speak / stop"
+            onTouchStart={toggleListening}
+            title="Tap to speak / stop"
           >
             {/* Outer Glowing Pulsing Rings */}
             <div
@@ -433,10 +534,10 @@ export function VoiceAssistantModal({
               }`}
             >
               {assistantState === 'listening' && '🎙️ Listening — Speak Now...'}
-              {assistantState === 'waiting' && '✅ Ready — Say next command or "Ok Insight"'}
+              {assistantState === 'waiting' && '✅ Ready — Say next command'}
               {assistantState === 'thinking' && '⚡ Executing Automation...'}
               {assistantState === 'speaking' && '🔊 Speaking...'}
-              {assistantState === 'idle' && 'Click Orb to Activate'}
+              {assistantState === 'idle' && 'Tap Orb to Activate'}
             </span>
 
             {/* Real-time Voice Transcript */}
@@ -471,7 +572,7 @@ export function VoiceAssistantModal({
 
             {!recognitionAvailable && (
               <p className="text-xs text-rose-400 bg-rose-950/50 p-2 rounded-lg border border-rose-800">
-                Speech recognition unavailable. Use Chrome, Edge, or Safari.
+                Speech recognition unavailable. Please enable mic permissions or use Chrome/Safari/Edge.
               </p>
             )}
           </div>
@@ -499,27 +600,27 @@ export function VoiceAssistantModal({
             </p>
             <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300 font-medium">
               <button
-                onClick={() => processVoiceCommand('Open YouTube')}
+                onClick={() => processVoiceCommand('Send WhatsApp message Hello')}
                 className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left truncate transition-colors flex items-center gap-1.5"
               >
                 <ExternalLink className="w-3 h-3 text-cyan-400 shrink-0" />
-                <span>&quot;Open YouTube&quot;</span>
+                <span>&quot;Send WhatsApp message...&quot;</span>
               </button>
 
               <button
-                onClick={() => processVoiceCommand('Open GitHub')}
+                onClick={() => processVoiceCommand('Compose Gmail saying Meeting at 5pm')}
                 className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left truncate transition-colors flex items-center gap-1.5"
               >
                 <Globe className="w-3 h-3 text-fuchsia-400 shrink-0" />
-                <span>&quot;Open GitHub&quot;</span>
+                <span>&quot;Compose Gmail...&quot;</span>
               </button>
 
               <button
-                onClick={() => processVoiceCommand('Upload a document')}
+                onClick={() => processVoiceCommand('Open YouTube')}
                 className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left truncate transition-colors flex items-center gap-1.5"
               >
                 <Zap className="w-3 h-3 text-indigo-400 shrink-0" />
-                <span>&quot;Upload a document&quot;</span>
+                <span>&quot;Open YouTube / Google&quot;</span>
               </button>
 
               <button
