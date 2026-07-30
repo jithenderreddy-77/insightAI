@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2 } from 'lucide-react';
+import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -505,46 +506,30 @@ export function VoiceAssistantModal({
 
   // --- MINIMIZED FLOATING DRAGGABLE ORB ---
   if (isMinimized) {
-    const isActive = assistantState === 'listening' || assistantState === 'waiting';
     return (
       <div
         ref={orbRef}
-        className="fixed z-[9999] select-none touch-none"
+        className="fixed z-[9999] select-none touch-none cursor-grab active:cursor-grabbing"
         style={{ left: orbPos.x, top: orbPos.y }}
         onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
         onTouchStart={(e) => { if (e.touches[0]) handleDragStart(e.touches[0].clientX, e.touches[0].clientY); }}
       >
-        <button
+        <AnimatedVoiceLogo
+          size="md"
+          state={assistantState}
           onClick={() => { if (!isDraggingRef.current) setIsMinimized(false); }}
-          className={`w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all duration-300 ${
-            isActive
-              ? 'bg-gradient-to-tr from-cyan-500 via-blue-500 to-indigo-600 shadow-[0_0_30px_rgba(59,130,246,0.8)] animate-pulse'
-              : assistantState === 'speaking'
-              ? 'bg-gradient-to-tr from-fuchsia-500 via-pink-500 to-purple-600 shadow-[0_0_30px_rgba(236,72,153,0.8)]'
-              : assistantState === 'thinking'
-              ? 'bg-gradient-to-tr from-indigo-500 via-purple-500 to-cyan-500 shadow-[0_0_30px_rgba(99,102,241,0.8)] animate-spin'
-              : 'bg-gradient-to-tr from-slate-700 via-slate-800 to-slate-900 shadow-lg border border-slate-600'
-          }`}
-          title="Tap to expand Insight Voice"
-        >
-          <Sparkles className={`w-6 h-6 text-white ${isActive ? 'animate-pulse' : ''}`} />
-        </button>
-
-        {/* Glowing ring around orb */}
-        <div className={`absolute inset-[-6px] rounded-full pointer-events-none ${
-          isActive ? 'border-2 border-blue-400/60 shadow-[0_0_20px_rgba(59,130,246,0.6)] animate-ping' : ''
-        }`} />
+        />
 
         {/* Mini transcript badge */}
         {transcript && (
-          <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-slate-900/95 border border-cyan-500/40 text-[10px] text-cyan-300 font-medium max-w-[150px] truncate shadow-lg">
+          <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-slate-900/95 border border-cyan-500/40 text-[10px] text-cyan-300 font-medium max-w-[150px] truncate shadow-lg pointer-events-none">
             {transcript}
           </div>
         )}
 
         {/* Action notice badge */}
         {actionNotice && (
-          <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-emerald-900/95 border border-emerald-500/40 text-[10px] text-emerald-300 font-bold max-w-[180px] truncate shadow-lg">
+          <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-emerald-900/95 border border-emerald-500/40 text-[10px] text-emerald-300 font-bold max-w-[180px] truncate shadow-lg pointer-events-none">
             {actionNotice}
           </div>
         )}
@@ -562,7 +547,7 @@ export function VoiceAssistantModal({
         {/* Top Bar */}
         <div className="p-4 px-6 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/50">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-cyan-400 animate-pulse" />
+            <AnimatedVoiceLogo size="sm" state={assistantState} />
             <span className="font-extrabold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
               INSIGHT VOICE
             </span>
@@ -571,7 +556,7 @@ export function VoiceAssistantModal({
             <button
               className="h-8 w-8 rounded-full flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
               onClick={() => setIsMinimized(true)}
-              title="Minimize to floating star"
+              title="Minimize to floating logo"
             >
               <Minimize2 className="w-4 h-4" />
             </button>
@@ -585,39 +570,15 @@ export function VoiceAssistantModal({
           </div>
         </div>
 
-        {/* Central Orb */}
+        {/* Central Animated Voice Logo */}
         <div className="p-6 py-8 flex flex-col items-center justify-center gap-5 relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-b from-cyan-500/10 via-fuchsia-500/10 to-indigo-500/10 blur-3xl pointer-events-none" />
 
-          <div className="relative cursor-pointer group flex items-center justify-center" onClick={toggleListening} title="Tap to speak / stop">
-            <div className={`absolute rounded-full transition-all duration-700 ${
-              assistantState === 'listening' || assistantState === 'waiting'
-                ? 'w-44 h-44 border-2 border-cyan-400/60 shadow-[0_0_40px_rgba(34,211,238,0.6)] animate-ping'
-                : assistantState === 'speaking'
-                ? 'w-44 h-44 border-2 border-fuchsia-400/60 shadow-[0_0_40px_rgba(232,121,249,0.6)] animate-pulse'
-                : assistantState === 'thinking'
-                ? 'w-44 h-44 border-2 border-indigo-400/60 shadow-[0_0_40px_rgba(129,140,248,0.6)] animate-spin'
-                : 'w-36 h-36 border border-slate-700/50 shadow-none'
-            }`} />
-
-            <div className={`w-28 h-28 rounded-full flex items-center justify-center shadow-2xl relative z-10 transition-transform duration-300 group-hover:scale-105 ${
-              assistantState === 'listening'
-                ? 'bg-gradient-to-tr from-cyan-500 via-indigo-500 to-fuchsia-500 shadow-[0_0_50px_rgba(34,211,238,0.8)]'
-                : assistantState === 'waiting'
-                ? 'bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-500 shadow-[0_0_50px_rgba(16,185,129,0.8)]'
-                : assistantState === 'speaking'
-                ? 'bg-gradient-to-tr from-fuchsia-600 via-pink-500 to-indigo-500 shadow-[0_0_50px_rgba(236,72,153,0.8)]'
-                : assistantState === 'thinking'
-                ? 'bg-gradient-to-tr from-indigo-600 via-purple-600 to-cyan-500 shadow-[0_0_50px_rgba(99,102,241,0.8)] animate-pulse'
-                : 'bg-gradient-to-tr from-slate-800 via-slate-900 to-indigo-950 shadow-lg border border-slate-700'
-            }`}>
-              {assistantState === 'listening' ? <Mic className="w-10 h-10 text-white animate-bounce" />
-                : assistantState === 'waiting' ? <Mic className="w-10 h-10 text-white animate-pulse" />
-                : assistantState === 'speaking' ? <Volume2 className="w-10 h-10 text-white animate-pulse" />
-                : assistantState === 'thinking' ? <Sparkles className="w-10 h-10 text-white animate-spin" />
-                : <MicOff className="w-9 h-9 text-slate-400 group-hover:text-cyan-400 transition-colors" />}
-            </div>
-          </div>
+          <AnimatedVoiceLogo
+            size="xl"
+            state={assistantState}
+            onClick={toggleListening}
+          />
 
           {/* Status */}
           <div className="flex flex-col items-center gap-2 text-center max-w-xs relative z-10">

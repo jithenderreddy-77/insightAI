@@ -32,6 +32,7 @@ import { AuthModal } from '@/components/auth-modal';
 import { HistorySidebar } from '@/components/history-sidebar';
 import { AdminModal } from '@/components/admin-modal';
 import { VoiceAssistantModal } from '@/components/voice-assistant-modal';
+import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import {
   UserProfile,
   ChatThread,
@@ -712,11 +713,11 @@ export default function Home() {
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-2 rounded-xl border-cyan-400/50 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/30 hover:to-indigo-500/30 text-cyan-700 dark:text-cyan-300 font-extrabold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all duration-300 animate-pulse hover:scale-105"
+                className="gap-2 rounded-xl border-cyan-400/50 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/30 hover:to-indigo-500/30 text-cyan-700 dark:text-cyan-300 font-extrabold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all duration-300 hover:scale-105"
                 onClick={() => setIsVoiceModalOpen(true)}
                 title="Activate Insight Voice Siri/Alexa Assistant"
               >
-                <Sparkles className="w-4 h-4 text-cyan-500 animate-spin" />
+                <AnimatedVoiceLogo size="sm" />
                 <span>Insight Voice</span>
               </Button>
 
