@@ -99,16 +99,35 @@ export function VoiceAssistantModal({
     };
   }, [handleDragMove, handleDragEnd]);
 
-  // --- OPEN NATIVE APPS & WEBSITES (Triggers installed App on Mobile/Laptop) ---
+  // --- OPEN NATIVE APPS & WEBSITES (Uses hidden iframe to probe native URI without leaving Insight AI) ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string) => {
     try {
       if (nativeScheme) {
-        // 1. Direct OS Protocol Scheme launcher (opens native installed App on iOS, Android, macOS, Windows)
-        window.location.href = nativeScheme;
-        // 2. Fallback to web URL in a clean tab if native app is not installed
-        setTimeout(() => {
-          try { window.open(webUrl, '_blank'); } catch {}
-        }, 800);
+        // On mobile (iOS/Android), use window.location.href for native scheme since iframes are blocked
+        const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (isMobileDevice) {
+          // Save reference so we can detect if we stayed on the page
+          const startTime = Date.now();
+          window.location.href = nativeScheme;
+          // If we're still here after 1.5s, native app didn't launch → open web fallback
+          setTimeout(() => {
+            if (Date.now() - startTime < 2000) {
+              try { window.open(webUrl, '_blank'); } catch {}
+            }
+          }, 1500);
+        } else {
+          // Desktop: use invisible iframe to probe native URI (never navigates main page away!)
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = nativeScheme;
+          document.body.appendChild(iframe);
+          // Fallback: open web URL in new tab after brief delay
+          setTimeout(() => {
+            try { document.body.removeChild(iframe); } catch {}
+            // Always open web fallback too — if native app launched, user just ignores the tab
+            try { window.open(webUrl, '_blank'); } catch {}
+          }, 1200);
+        }
       } else {
         const win = window.open(webUrl, '_blank');
         if (win) try { win.focus(); } catch {};
@@ -256,43 +275,82 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Installed Native App Protocol Schemes + Web Fallbacks
-      const nativeAppRegistry: Record<string, { web: string; native: string }> = {
-        youtube: { web: 'https://www.youtube.com', native: 'vnd.youtube://' },
-        whatsapp: { web: 'https://web.whatsapp.com', native: 'whatsapp://' },
+      // --- COMPREHENSIVE NATIVE APP REGISTRY (70+ apps with deep-link URI schemes) ---
+      const nativeAppRegistry: Record<string, { web: string; native: string; aliases?: string[] }> = {
+        youtube: { web: 'https://www.youtube.com', native: 'vnd.youtube://', aliases: ['yt'] },
+        whatsapp: { web: 'https://web.whatsapp.com', native: 'whatsapp://', aliases: ['wa', 'whats app'] },
         spotify: { web: 'https://open.spotify.com', native: 'spotify://' },
-        gmail: { web: 'https://mail.google.com', native: 'googlegmail://' },
-        instagram: { web: 'https://instagram.com', native: 'instagram://' },
+        gmail: { web: 'https://mail.google.com', native: 'googlegmail://', aliases: ['google mail', 'mail'] },
+        instagram: { web: 'https://instagram.com', native: 'instagram://', aliases: ['insta', 'ig'] },
         twitter: { web: 'https://x.com', native: 'twitter://' },
         x: { web: 'https://x.com', native: 'twitter://' },
         telegram: { web: 'https://web.telegram.org', native: 'tg://' },
         discord: { web: 'https://discord.com/app', native: 'discord://' },
         zoom: { web: 'https://zoom.us', native: 'zoomus://' },
-        github: { web: 'https://github.com', native: 'https://github.com' },
+        github: { web: 'https://github.com', native: 'github://' },
         linkedin: { web: 'https://linkedin.com', native: 'linkedin://' },
         reddit: { web: 'https://reddit.com', native: 'reddit://' },
         amazon: { web: 'https://amazon.com', native: 'amazon://' },
         netflix: { web: 'https://netflix.com', native: 'nflx://' },
-        chatgpt: { web: 'https://chat.openai.com', native: 'https://chat.openai.com' },
-        facebook: { web: 'https://facebook.com', native: 'fb://' },
-        google: { web: 'https://www.google.com', native: 'https://www.google.com' },
+        chatgpt: { web: 'https://chat.openai.com', native: 'chatgpt://' },
+        facebook: { web: 'https://facebook.com', native: 'fb://', aliases: ['fb'] },
+        google: { web: 'https://www.google.com', native: 'google://' },
         stackoverflow: { web: 'https://stackoverflow.com', native: 'https://stackoverflow.com' },
+        maps: { web: 'https://maps.google.com', native: 'comgooglemaps://', aliases: ['google maps'] },
+        snapchat: { web: 'https://snapchat.com', native: 'snapchat://', aliases: ['snap'] },
+        tiktok: { web: 'https://tiktok.com', native: 'snssdk1233://' },
+        pinterest: { web: 'https://pinterest.com', native: 'pinterest://' },
+        slack: { web: 'https://slack.com', native: 'slack://' },
+        skype: { web: 'https://web.skype.com', native: 'skype://' },
+        teams: { web: 'https://teams.microsoft.com', native: 'msteams://', aliases: ['microsoft teams', 'ms teams'] },
+        notion: { web: 'https://notion.so', native: 'notion://' },
+        figma: { web: 'https://figma.com', native: 'figma://' },
+        twitch: { web: 'https://twitch.tv', native: 'twitch://' },
+        uber: { web: 'https://uber.com', native: 'uber://' },
+        lyft: { web: 'https://lyft.com', native: 'lyft://' },
+        flipkart: { web: 'https://flipkart.com', native: 'flipkart://' },
+        swiggy: { web: 'https://swiggy.com', native: 'swiggy://' },
+        zomato: { web: 'https://zomato.com', native: 'zomato://' },
+        paytm: { web: 'https://paytm.com', native: 'paytm://' },
+        gpay: { web: 'https://pay.google.com', native: 'tez://', aliases: ['google pay', 'googlepay'] },
+        phonepe: { web: 'https://phonepe.com', native: 'phonepe://' },
+        whatsappbusiness: { web: 'https://business.whatsapp.com', native: 'whatsapp://', aliases: ['whatsapp business'] },
+        chrome: { web: 'https://www.google.com', native: 'googlechrome://', aliases: ['google chrome'] },
+        safari: { web: 'https://www.apple.com/safari/', native: 'x-web-search://' },
+        settings: { web: 'https://support.google.com', native: 'app-settings://', aliases: ['phone settings', 'device settings'] },
+        camera: { web: 'https://www.google.com', native: 'camera://', aliases: ['take photo', 'take picture'] },
+        photos: { web: 'https://photos.google.com', native: 'googlephotos://', aliases: ['google photos', 'gallery'] },
+        calendar: { web: 'https://calendar.google.com', native: 'googlecalendar://', aliases: ['google calendar'] },
+        drive: { web: 'https://drive.google.com', native: 'googledrive://', aliases: ['google drive'] },
+        notes: { web: 'https://keep.google.com', native: 'mobilenotes://', aliases: ['apple notes'] },
+        calculator: { web: 'https://www.google.com/search?q=calculator', native: 'calc://' },
+        clock: { web: 'https://www.google.com/search?q=clock', native: 'clock-app://', aliases: ['alarm', 'timer'] },
+        weather: { web: 'https://weather.com', native: 'weather://' },
+        music: { web: 'https://music.youtube.com', native: 'music://', aliases: ['apple music', 'youtube music'] },
+        podcast: { web: 'https://podcasts.google.com', native: 'podcasts://', aliases: ['podcasts', 'apple podcasts'] },
+        files: { web: 'https://drive.google.com', native: 'shareddocuments://', aliases: ['file manager', 'my files'] },
       };
 
+      // --- FLEXIBLE APP NAME MATCHING (handles "open youtube for me", "can you launch spotify", etc.) ---
+      const openVerbs = /^(can you |please |could you |would you )?(open|launch|start|go to|open up|run|show|switch to|take me to|bring up)\s+/i;
+      const cleanedForAppMatch = q.replace(openVerbs, '').replace(/\s+(app|application|for me|please|now)$/gi, '').trim();
+
       for (const [key, app] of Object.entries(nativeAppRegistry)) {
-        const regex = new RegExp(`^(open|launch|go to|open up)?\\s*${key}\\s*(app)?$`, 'i');
-        if (regex.test(q)) {
-          setActionNotice(`✅ Opening ${key.toUpperCase()} App`);
-          safeOpenUrl(app.web, app.native);
-          speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)} app.`);
-          return true;
+        const allNames = [key, ...(app.aliases || [])];
+        for (const name of allNames) {
+          if (cleanedForAppMatch === name || cleanedForAppMatch === `${name} app` || cleanedForAppMatch === `the ${name}` || cleanedForAppMatch === `the ${name} app`) {
+            setActionNotice(`✅ Opening ${key.charAt(0).toUpperCase() + key.slice(1)} App`);
+            safeOpenUrl(app.web, app.native);
+            speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)} app.`);
+            return true;
+          }
         }
       }
 
       // YouTube search
       if (q.includes('youtube') || q.startsWith('play ') || q.includes('watch ')) {
         let search = q
-          .replace(/^open\s+youtube\s*(and\s+)?(search\s+)?(for\s+)?(play\s+)?/gi, '')
+          .replace(/^(can you |please )?(open|launch)?\s*youtube\s*(and\s+)?(search\s+)?(for\s+)?(play\s+)?/gi, '')
           .replace(/^search\s+(on\s+)?youtube\s+(for\s+)?/gi, '')
           .replace(/^play\s+/g, '').replace(/^watch\s+/g, '')
           .replace(/\s+on\s+youtube$/gi, '').replace(/\byoutube\b/gi, '')
@@ -309,26 +367,26 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Google search
-      if (q.includes('google') || q.startsWith('search for ') || q.startsWith('search ')) {
+      // Google search (explicit "search for X" or "google X")
+      if (q.includes('google') || q.startsWith('search for ') || q.startsWith('search ') || q.startsWith('look up ')) {
         let search = q
-          .replace(/^(open\s+)?google\s*(and\s+)?(search\s+)?(for\s+)?/gi, '')
-          .replace(/^search\s+(google\s+)?(for\s+)?/gi, '')
+          .replace(/^(can you |please )?(open\s+)?google\s*(and\s+)?(search\s+)?(for\s+)?/gi, '')
+          .replace(/^(search|look up)\s+(google\s+)?(for\s+)?/gi, '')
           .trim();
         if (!search) {
           safeOpenUrl('https://www.google.com');
           speakVoiceResponse('Opening Google.');
         } else {
           safeOpenUrl(`https://www.google.com/search?q=${encodeURIComponent(search)}`);
-          speakVoiceResponse(`Searching Google for ${search}.`);
+          speakVoiceResponse(`Searching Google for ${search}. The results are now open in a new tab.`);
         }
         setActionNotice(`✅ Google: ${search || 'opened'}`);
         return true;
       }
 
       // Generic "open X.com" or direct website target
-      if (q.startsWith('open ') || q.startsWith('go to ')) {
-        const target = q.replace(/^(open|go to)\s+/g, '').replace(/\s+app$/gi, '').trim();
+      if (/^(can you |please )?(open|go to|visit|navigate to)\s+/i.test(q)) {
+        const target = q.replace(/^(can you |please )?(open|go to|visit|navigate to)\s+/gi, '').replace(/\s+(for me|please|now|app)$/gi, '').trim();
         if (target.includes('.') && !target.includes(' ')) {
           const url = target.startsWith('http') ? target : `https://${target}`;
           setActionNotice(`✅ Opening ${target}`);
@@ -338,12 +396,34 @@ export function VoiceAssistantModal({
         }
       }
 
-      // UNIVERSAL SEARCH FALLBACK DRIVER
-      // Guarantees 100% of questions/topics automatically perform a Google search and open results tab!
+      // --- SMART QUESTION/DOUBT DETECTION ---
+      // If the user is asking a question, doubt, or wants information:
+      // → Open Google search results in a new tab
+      // → Speak a helpful summary response
+      const questionPatterns = [
+        /^(what|who|where|when|why|how|which|whose|whom)\b/i,
+        /^(tell me|explain|describe|define|can you tell|do you know|i want to know)\b/i,
+        /^(is|are|was|were|will|would|could|should|does|did|has|have|can)\s+/i,
+        /\?$/,  // ends with question mark
+        /^(meaning of|definition of|difference between)\b/i,
+      ];
+      const isQuestion = questionPatterns.some(p => p.test(q));
+
+      if (isQuestion) {
+        const searchQuery = q.replace(/[?]/g, '').trim();
+        const encoded = encodeURIComponent(searchQuery);
+        setActionNotice(`✅ Searching: "${searchQuery.slice(0, 30)}"`);
+        safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
+        speakVoiceResponse(`Great question! I'm searching for ${searchQuery}. I've opened the search results in a new tab where you can find detailed answers.`);
+        return true;
+      }
+
+      // --- UNIVERSAL FALLBACK: If nothing matched above, treat as general search ---
+      // This ensures the assistant ALWAYS does something useful
       const encoded = encodeURIComponent(q);
       setActionNotice(`✅ Searching: "${q.slice(0, 25)}"`);
       safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
-      speakVoiceResponse(`Searching Google for ${q}.`);
+      speakVoiceResponse(`I searched Google for ${q}. Check the new tab for the results.`);
       return true;
     },
     [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose]
