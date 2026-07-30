@@ -33,6 +33,7 @@ import { HistorySidebar } from '@/components/history-sidebar';
 import { AdminModal } from '@/components/admin-modal';
 import { VoiceAssistantModal } from '@/components/voice-assistant-modal';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
+import { InstallAppModal } from '@/components/install-app-modal';
 import {
   UserProfile,
   ChatThread,
@@ -78,6 +79,7 @@ export default function Home() {
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   
   // Chat History & Threads State
   const [threads, setThreads] = useState<ChatThread[]>([]);
@@ -654,6 +656,15 @@ export default function Home() {
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
         uploadedFiles={files}
+        onOpenInstallModal={() => setIsInstallModalOpen(true)}
+      />
+
+      {/* App Install / Download Modal Component */}
+      <InstallAppModal
+        isOpen={isInstallModalOpen}
+        onClose={() => setIsInstallModalOpen(false)}
+        deferredPrompt={deferredInstallPrompt}
+        onInstall={handleInstallApp}
       />
 
       {/* Auth Modal Component */}
@@ -675,16 +686,28 @@ export default function Home() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              {/* Sidebar toggle button */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800"
-                onClick={() => setIsSidebarOpen(true)}
-                title="Open Chat & File History"
-              >
-                <History className="w-5 h-5" />
-              </Button>
+              {/* Chat History & Download App buttons */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800"
+                  onClick={() => setIsSidebarOpen(true)}
+                  title="Open Chat & File History"
+                >
+                  <History className="w-5 h-5" />
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-slate-800 transition-all hover:scale-105"
+                  onClick={() => setIsInstallModalOpen(true)}
+                  title="Download & Install Insight AI App on Android, macOS, Windows, Linux, iOS"
+                >
+                  <Download className="w-5 h-5 text-indigo-600 dark:text-indigo-400 animate-bounce" />
+                </Button>
+              </div>
 
               {/* Clickable Brand Logo — returns to Home Dashboard & secret triple-click Admin trigger */}
               <div
