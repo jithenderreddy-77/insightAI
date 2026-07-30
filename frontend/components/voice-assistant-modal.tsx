@@ -334,7 +334,7 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Generic "open X.com" fallback
+      // Generic "open X.com" or direct website target
       if (q.startsWith('open ') || q.startsWith('go to ')) {
         const target = q.replace(/^(open|go to)\s+/g, '').replace(/\s+app$/gi, '').trim();
         if (target.includes('.') && !target.includes(' ')) {
@@ -344,14 +344,15 @@ export function VoiceAssistantModal({
           speakVoiceResponse(`Opening ${target}.`);
           return true;
         }
-        const encoded = encodeURIComponent(target);
-        setActionNotice(`✅ Searching: ${target}`);
-        safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
-        speakVoiceResponse(`Searching for ${target}.`);
-        return true;
       }
 
-      return false;
+      // UNIVERSAL SEARCH FALLBACK DRIVER
+      // Guarantees 100% of questions/topics automatically perform a Google search and open results tab!
+      const encoded = encodeURIComponent(q);
+      setActionNotice(`✅ Searching: "${q.slice(0, 25)}"`);
+      safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
+      speakVoiceResponse(`Searching Google for ${q}.`);
+      return true;
     },
     [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose]
   );

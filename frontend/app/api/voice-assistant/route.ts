@@ -356,7 +356,7 @@ function generateFallbackAction(query: string, rawTranscript: string, hasActiveD
     };
   }
 
-  if (hasActiveDocs) {
+  if (hasActiveDocs && (query.includes('document') || query.includes('pdf') || query.includes('resume') || query.includes('summary'))) {
     return {
       spokenResponse: 'Querying your uploaded documents.',
       actionType: 'DOCUMENT_QA',
@@ -364,8 +364,11 @@ function generateFallbackAction(query: string, rawTranscript: string, hasActiveD
     };
   }
 
+  const encoded = encodeURIComponent(rawTranscript);
   return {
-    spokenResponse: `I heard: "${rawTranscript}". You can ask me to open websites, search YouTube, upload documents, or answer queries!`,
-    actionType: 'GENERAL_CHAT',
+    spokenResponse: `Searching Google for ${rawTranscript}.`,
+    actionType: 'OPEN_WEBSITE',
+    targetUrl: `https://www.google.com/search?q=${encoded}`,
+    searchQuery: rawTranscript,
   };
 }
