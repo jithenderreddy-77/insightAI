@@ -185,47 +185,9 @@ function matchDirectPattern(query: string, hasActiveDocs: boolean) {
     };
   }
 
-  // YouTube search / play
-  if (query.includes('youtube') || query.startsWith('play ') || query.includes('watch ')) {
-    let search = query
-      .replace(/open youtube (and )?/g, '')
-      .replace(/search (on )?youtube (for )?/g, '')
-      .replace(/^play /g, '')
-      .replace(/^watch /g, '')
-      .trim();
-
-    if (!search || search === 'youtube') {
-      return {
-        spokenResponse: 'Opening YouTube.',
-        actionType: 'OPEN_WEBSITE',
-        targetUrl: 'https://www.youtube.com',
-        searchQuery: '',
-      };
-    }
-
-    const encoded = encodeURIComponent(search);
-    return {
-      spokenResponse: `Opening YouTube search for ${search}.`,
-      actionType: 'OPEN_WEBSITE',
-      targetUrl: `https://www.youtube.com/results?search_query=${encoded}`,
-      searchQuery: search,
-    };
-  }
-
-  // Google Search
-  if (query.includes('google') || query.startsWith('search for ')) {
-    const search = query.replace(/^search (google )?(for )?/g, '').replace(/^google /g, '').trim();
-    const encoded = encodeURIComponent(search || 'Insight AI');
-    return {
-      spokenResponse: `Searching Google for ${search || 'Insight AI'}.`,
-      actionType: 'OPEN_WEBSITE',
-      targetUrl: `https://www.google.com/search?q=${encoded}`,
-      searchQuery: search,
-    };
-  }
-
-  // Common Popular Websites
+  // Common Popular Websites — Check FIRST before YouTube search
   const websiteMappings: Record<string, string> = {
+    youtube: 'https://www.youtube.com',
     github: 'https://github.com',
     twitter: 'https://x.com',
     x: 'https://x.com',
@@ -236,17 +198,85 @@ function matchDirectPattern(query: string, hasActiveDocs: boolean) {
     netflix: 'https://netflix.com',
     spotify: 'https://open.spotify.com',
     gmail: 'https://mail.google.com',
+    whatsapp: 'https://web.whatsapp.com',
+    instagram: 'https://instagram.com',
+    chatgpt: 'https://chat.openai.com',
+    facebook: 'https://facebook.com',
+    stackoverflow: 'https://stackoverflow.com',
   };
 
+  // Check exact "open <site>" commands against website mappings
   for (const [key, url] of Object.entries(websiteMappings)) {
-    if (query.includes(`open ${key}`) || query === key || query === `go to ${key}`) {
+    // Match: "open youtube", "go to github", just "gmail", "open up spotify"
+    if (
+      query === `open ${key}` ||
+      query === key ||
+      query === `go to ${key}` ||
+      query === `open up ${key}` ||
+      query === `launch ${key}` ||
+      query.startsWith(`open ${key}`) && query.replace(`open ${key}`, '').trim().length === 0
+    ) {
       return {
-        spokenResponse: `Opening ${key.toUpperCase()}.`,
+        spokenResponse: `Opening ${key.charAt(0).toUpperCase() + key.slice(1)}.`,
         actionType: 'OPEN_WEBSITE',
         targetUrl: url,
         searchQuery: key,
       };
     }
+  }
+
+  // YouTube search / play — ONLY if it has a search query after the youtube keyword
+  if (query.includes('youtube') || query.startsWith('play ') || query.includes('watch ')) {
+    let search = query
+      .replace(/^open\s+youtube\s*(and\s+)?(search\s+)?(for\s+)?(play\s+)?/gi, '')
+      .replace(/^search\s+(on\s+)?youtube\s+(for\s+)?/gi, '')
+      .replace(/^play\s+/g, '')
+      .replace(/^watch\s+/g, '')
+      .replace(/\s+on\s+youtube$/gi, '')
+      .replace(/\byoutube\b/gi, '')
+      .trim();
+
+    if (!search) {
+      return {
+        spokenResponse: 'Opening YouTube.',
+        actionType: 'OPEN_WEBSITE',
+        targetUrl: 'https://www.youtube.com',
+        searchQuery: '',
+      };
+    }
+
+    const encoded = encodeURIComponent(search);
+    return {
+      spokenResponse: `Searching YouTube for ${search}.`,
+      actionType: 'OPEN_WEBSITE',
+      targetUrl: `https://www.youtube.com/results?search_query=${encoded}`,
+      searchQuery: search,
+    };
+  }
+
+  // Google Search
+  if (query.includes('google') || query.startsWith('search for ') || query.startsWith('search ')) {
+    let search = query
+      .replace(/^(open\s+)?google\s*(and\s+)?(search\s+)?(for\s+)?/gi, '')
+      .replace(/^search\s+(google\s+)?(for\s+)?/gi, '')
+      .trim();
+
+    if (!search) {
+      return {
+        spokenResponse: 'Opening Google.',
+        actionType: 'OPEN_WEBSITE',
+        targetUrl: 'https://www.google.com',
+        searchQuery: '',
+      };
+    }
+
+    const encoded = encodeURIComponent(search);
+    return {
+      spokenResponse: `Searching Google for ${search}.`,
+      actionType: 'OPEN_WEBSITE',
+      targetUrl: `https://www.google.com/search?q=${encoded}`,
+      searchQuery: search,
+    };
   }
 
   // Document Q&A trigger
