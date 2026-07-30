@@ -132,3 +132,22 @@ div.error-icon {
   left: -9999px !important;
 }
 
+@keyframes neonOrbRotate {
+  0% {
+    transform: rotate(0deg) scale(1);
+    filter: hue-rotate(0deg);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.08);
+    filter: hue-rotate(90deg);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+    filter: hue-rotate(0deg);
+  }
+}
+
+.animate-neon-orb {
+  animation: neonOrbRotate 8s linear infinite;
+}
+

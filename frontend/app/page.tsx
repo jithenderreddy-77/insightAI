@@ -31,6 +31,7 @@ import { FilePreview } from '@/components/file-preview';
 import { AuthModal } from '@/components/auth-modal';
 import { HistorySidebar } from '@/components/history-sidebar';
 import { AdminModal } from '@/components/admin-modal';
+import { VoiceAssistantModal } from '@/components/voice-assistant-modal';
 import {
   UserProfile,
   ChatThread,
@@ -75,6 +76,7 @@ export default function Home() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
   
   // Chat History & Threads State
   const [threads, setThreads] = useState<ChatThread[]>([]);
@@ -619,6 +621,25 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950/20">
+      {/* Voice Assistant Siri/Alexa Glowing Modal */}
+      <VoiceAssistantModal
+        isOpen={isVoiceModalOpen}
+        onClose={() => setIsVoiceModalOpen(false)}
+        hasActiveDocuments={files.length > 0 || offlineDocs.length > 0}
+        onTriggerUpload={() => fileInputRef.current?.click()}
+        onNewChat={handleNewChat}
+        onOpenHistory={() => setIsSidebarOpen(true)}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onInstallApp={handleInstallApp}
+        onAskDocumentQuestion={(question) => {
+          setInput(question);
+          setTimeout(() => {
+            const form = document.getElementById('chat-input-form') as HTMLFormElement;
+            if (form) form.requestSubmit();
+          }, 200);
+        }}
+      />
+
       {/* History Sidebar Component */}
       <HistorySidebar
         isOpen={isSidebarOpen}
@@ -687,6 +708,18 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-3">
+              {/* Glowing Neon Siri/Alexa Voice Assistant Trigger */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 rounded-xl border-cyan-400/50 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/30 hover:to-indigo-500/30 text-cyan-700 dark:text-cyan-300 font-extrabold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all duration-300 animate-pulse hover:scale-105"
+                onClick={() => setIsVoiceModalOpen(true)}
+                title="Activate Insight Voice Siri/Alexa Assistant"
+              >
+                <Sparkles className="w-4 h-4 text-cyan-500 animate-spin" />
+                <span>Insight Voice</span>
+              </Button>
+
               {/* PWA Install App Button */}
               {isInstallable && (
                 <Button
