@@ -189,35 +189,14 @@ export async function POST(req: Request) {
 - NEVER guess, assume, infer, or fabricate any facts. NEVER fill in gaps with general knowledge.
 - If the document says the candidate has "no experience" or does not mention any work experience, report exactly that — do NOT invent experience.
 - When quoting numbers, dates, percentages, or statistics, copy them EXACTLY from the document. Do not round, estimate, or approximate.
-- If you are unsure whether something is in the document, err on the side of saying "not explicitly mentioned" rather than guessing.
-
-## RESPONSE QUALITY INSTRUCTIONS:
-
-1. RESUME / CV EVALUATION & SELECTION ANALYSIS:
-   When asked evaluative questions about a CV or Resume (e.g. "Is this candidate worthy?", "Should we hire?", "Evaluate this resume"):
-   - Perform a FACTUAL analysis using ONLY what the document states.
-   - Provide a structured evaluation:
-     * ### Selection Verdict: (Based strictly on document facts)
-     * ### Qualifications & Skills: (ONLY skills explicitly listed in the document)
-     * ### Work Experience: (ONLY experience explicitly stated — if none is mentioned, state "No work experience listed in the document")
-     * ### Education: (ONLY education details from the document)
-     * ### Key Strengths: (Based on document content only)
-     * ### Gaps or Considerations: (What is missing from the document)
-     * ### Recommendation: (Justified by document facts only)
-   - CRITICAL: If the resume does NOT list work experience, do NOT fabricate "2+ years" or any duration. State the facts as they are.
-
-2. GENERAL DOCUMENT Q&A:
-   - Extract and present facts directly from the document passages.
-   - Use bullet points, tables, and clear formatting.
-   - Always cite which part of the document your answer comes from.
-
-${mermaidInstructions}
-
-4. DEEP ANALYTICAL REASONING: For complex questions, analyze all passages thoroughly and synthesize facts into a complete answer. But NEVER add information that isn't in the document.
 
 DOCUMENT CONTEXT:
 ${context}`
-      : 'You are a world-class AI assistant. Answer clearly and accurately. When asked for diagrams or flowcharts, produce ultra-detailed, publication-grade Mermaid diagrams in ```mermaid code blocks with subgraphs, decision diamonds, labeled edges, and clean nodes. Follow strict Mermaid syntax: use `subgraph SG1["Title"]` ... `end`, use `A -->|"Label"| B` (never `-->|Label|>`), and wrap node text in quotes. Do NOT use emoji in Mermaid labels.';
+      : `You are Insight AI, a warm, highly intelligent, enthusiastic, and wonderfully friendly AI assistant.
+Converse naturally, humanly, and helpfully—just like a brilliant human friend!
+- Respond to greetings ("hi", "hello", "good morning", "how are you") warmly and conversationally.
+- Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
+- ${mermaidInstructions}`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
@@ -388,7 +367,17 @@ ${context}`
  */
 function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   if (!docs || docs.length === 0) {
-    return `Based on the uploaded document, no document content was found to answer "${query}". Please ensure your PDF, Word, Excel, or Text file is uploaded.`;
+    const qLower = query.toLowerCase().trim();
+    if (qLower.includes('hi') || qLower.includes('hello') || qLower.includes('good morning') || qLower.includes('good evening') || qLower.includes('hey')) {
+      return `Hello there! 😊 Good day! I'm Insight AI, your intelligent assistant. How can I help you today? Feel free to ask me anything or upload a document for deep analysis!`;
+    }
+    if (qLower.includes('how are you') || qLower.includes('how do you do')) {
+      return `I'm doing fantastic, thank you for asking! ✨ I'm ready to help you with anything—answering questions, writing code, or analyzing documents. How is your day going?`;
+    }
+    if (qLower.includes('who are you') || qLower.includes('what can you do')) {
+      return `I am Insight AI! 🚀 I can answer any questions, chat naturally, write code, create visual Mermaid flowcharts, summarize documents, and automate web and app actions. What would you like to explore?`;
+    }
+    return `Hello! I'm ready to help you with anything. Ask me any question, brainstorm ideas, or upload a document to get started!`;
   }
 
   const queryLower = query.toLowerCase();

@@ -99,30 +99,22 @@ export function VoiceAssistantModal({
     };
   }, [handleDragMove, handleDragEnd]);
 
-  // --- OPEN NATIVE APPS & WEBSITES IN NEW TABS (Preserves Current Session Tab) ---
+  // --- OPEN NATIVE APPS & WEBSITES (Triggers installed App on Mobile/Laptop) ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string) => {
     try {
-      // 1. Trigger Native Application Protocol Scheme (Opens installed app on macOS/Windows/iOS/Android)
       if (nativeScheme) {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = nativeScheme;
-        document.body.appendChild(iframe);
+        // 1. Direct OS Protocol Scheme launcher (opens native installed App on iOS, Android, macOS, Windows)
+        window.location.href = nativeScheme;
+        // 2. Fallback to web URL in a clean tab if native app is not installed
         setTimeout(() => {
-          try { document.body.removeChild(iframe); } catch {}
-        }, 1500);
-      }
-
-      // 2. Open Web App in NEW CLEAN TAB (_blank) — NEVER replaces active Insight AI tab session
-      const win = window.open(webUrl, '_blank');
-      if (win) {
-        try { win.focus(); } catch {}
+          try { window.open(webUrl, '_blank'); } catch {}
+        }, 800);
       } else {
-        // Backup target window if browser popup blocker restricts un-named _blank
-        window.open(webUrl, 'insight_app_launch');
+        const win = window.open(webUrl, '_blank');
+        if (win) try { win.focus(); } catch {};
       }
     } catch (err) {
-      console.error('Error launching app/url:', err);
+      window.open(webUrl, '_blank');
     }
   }, []);
 
