@@ -39,15 +39,23 @@ export function VoiceAssistantModal({
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
+  const automationTabRef = useRef<Window | null>(null);
 
-  // Popup-blocker safe tab opener (Guarantees navigation on all devices)
+  // Popup-blocker safe tab opener (reuses dedicated automation tab for multi-command support)
   const safeOpenUrl = useCallback((url: string) => {
     setPendingUrl(url);
     try {
-      const win = window.open(url, '_blank', 'noopener,noreferrer');
-      if (!win || win.closed || typeof win.closed === 'undefined') {
-        // Fallback: If popup blocker blocks _blank, navigate current tab directly
-        window.location.assign(url);
+      if (automationTabRef.current && !automationTabRef.current.closed) {
+        automationTabRef.current.location.href = url;
+        try { automationTabRef.current.focus(); } catch {}
+      } else {
+        const win = window.open(url, 'insight_automation_tab');
+        if (win) {
+          automationTabRef.current = win;
+        } else {
+          // Fallback if popup blocker blocks _blank window
+          window.location.assign(url);
+        }
       }
     } catch {
       window.location.assign(url);
