@@ -40,21 +40,21 @@ export function VoiceAssistantModal({
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
 
-  // Popup-blocker safe tab opener
+  // Popup-blocker safe tab opener (Guarantees navigation on all devices)
   const safeOpenUrl = useCallback((url: string) => {
     setPendingUrl(url);
     try {
       const win = window.open(url, '_blank', 'noopener,noreferrer');
       if (!win || win.closed || typeof win.closed === 'undefined') {
-        // Fallback to direct location assignment if popup is blocked by browser security
-        window.location.href = url;
+        // Fallback: If popup blocker blocks _blank, navigate current tab directly
+        window.location.assign(url);
       }
     } catch {
-      window.location.href = url;
+      window.location.assign(url);
     }
   }, []);
 
-  // Text-to-Speech
+  // Text-to-Speech synthesis
   const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       if (onComplete) onComplete();
@@ -87,7 +87,7 @@ export function VoiceAssistantModal({
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // Restart continuous listening after command completes
+  // Restart continuous listening loop
   const restartContinuousListening = useCallback(() => {
     if (!recognitionRef.current) return;
     isProcessingRef.current = false;
@@ -101,13 +101,15 @@ export function VoiceAssistantModal({
       try {
         recognitionRef.current.start();
       } catch {}
-    }, 300);
+    }, 250);
   }, []);
 
-  // Instant Client-Side Fast-Path Automation (0ms latency before network fetch)
+  // Instant Client-Side Fast-Path Automation (Sub-second execution with punctuation cleaning)
   const matchClientInstantAction = useCallback(
     (query: string) => {
-      const q = query.toLowerCase().trim();
+      // Clean punctuation (. , ! ? ; :) and extra spaces from transcript
+      const q = query.toLowerCase().replace(/[.,!?;:]/g, '').replace(/\s+/g, ' ').trim();
+      if (!q) return false;
 
       // App Actions
       if (q.includes('upload') || q.includes('add file') || q.includes('add pdf') || q.includes('select document')) {
@@ -173,7 +175,7 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Popular Websites Direct Open
+      // Popular Websites Direct Open (Regex Matching for flexible variations)
       const sites: Record<string, string> = {
         youtube: 'https://www.youtube.com',
         github: 'https://github.com',
@@ -194,7 +196,8 @@ export function VoiceAssistantModal({
       };
 
       for (const [key, url] of Object.entries(sites)) {
-        if (q === `open ${key}` || q === key || q === `go to ${key}` || q === `open up ${key}` || q === `launch ${key}`) {
+        const regex = new RegExp(`^(open|go to|launch|open up)?\\s*${key}\\s*$`, 'i');
+        if (regex.test(q)) {
           setActionNotice(`✅ Opening ${key.toUpperCase()}`);
           safeOpenUrl(url);
           speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)}.`);
@@ -219,15 +222,19 @@ export function VoiceAssistantModal({
       setPendingUrl(null);
       setCommandLog((prev) => [...prev.slice(-4), spokenTranscript]);
 
-      // Stop mic while processing
+      // Stop mic while processing to prevent feedback loop
       try { recognitionRef.current?.stop(); } catch {}
 
-      // Fast-path instant execution check (0ms latency!)
-      const handledInstantly = matchClientInstantAction(spokenTranscript);
-      if (handledInstantly) return;
-
-      // Full AI Intent Parser for complex queries / composition
       try {
+        // Fast-path instant execution check (0ms latency!)
+        const handledInstantly = matchClientInstantAction(spokenTranscript);
+        if (handledInstantly) {
+          // Reset processing lock
+          isProcessingRef.current = false;
+          return;
+        }
+
+        // Full AI Intent Parser for complex queries / composition
         const response = await fetch('/api/voice-assistant', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -279,6 +286,9 @@ export function VoiceAssistantModal({
       } catch (err) {
         console.error('Error processing voice command:', err);
         speakVoiceResponse('Sorry, there was an issue. Please try again.');
+      } finally {
+        // ALWAYS unlock processing lock so future commands work
+        isProcessingRef.current = false;
       }
     },
     [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onClose]
@@ -297,7 +307,6 @@ export function VoiceAssistantModal({
     const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const rec = new SpeechRecognitionAPI();
 
-    // iOS Safari requires continuous = false to prevent crashes/freezes
     rec.continuous = !isMobileDevice;
     rec.interimResults = true;
     rec.lang = 'en-US';
@@ -366,7 +375,6 @@ export function VoiceAssistantModal({
     };
 
     rec.onend = () => {
-      // Auto-restart loop for mobile & desktop
       if (!isProcessingRef.current && shouldRestartRef.current) {
         setTimeout(() => {
           try { rec.start(); } catch {}
@@ -441,7 +449,7 @@ export function VoiceAssistantModal({
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-cyan-400 animate-pulse" />
             <span className="font-extrabold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
-              INSIGHT VOICE (COMET AI)
+              INSIGHT VOICE AUTOMATION
             </span>
             <span className="text-[10px] text-slate-500 font-medium hidden sm:inline">Say &quot;Ok Insight&quot;</span>
           </div>
@@ -562,7 +570,7 @@ export function VoiceAssistantModal({
 
             {pendingUrl && (
               <button
-                onClick={() => window.open(pendingUrl, '_blank')}
+                onClick={() => safeOpenUrl(pendingUrl)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 text-white font-extrabold text-xs shadow-lg transition-transform hover:scale-105 animate-bounce"
               >
                 <ExternalLink className="w-4 h-4" />

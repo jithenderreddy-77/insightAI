@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
     const openaiApiKey = process.env.OPENAI_API_KEY;
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
-    const queryLower = transcript.toLowerCase().trim();
+    const queryLower = transcript.toLowerCase().replace(/[.,!?;:]/g, '').replace(/\s+/g, ' ').trim();
 
     // 1) Fast deterministic pattern matching for common instant actions (Sub-second execution)
     const directAction = matchDirectPattern(queryLower, hasActiveDocuments);
@@ -253,17 +253,10 @@ function matchDirectPattern(query: string, hasActiveDocs: boolean) {
     stackoverflow: 'https://stackoverflow.com',
   };
 
-  // Check exact "open <site>" commands against website mappings
+  // Check "open <site>" commands against website mappings using regex
   for (const [key, url] of Object.entries(websiteMappings)) {
-    // Match: "open youtube", "go to github", just "gmail", "open up spotify"
-    if (
-      query === `open ${key}` ||
-      query === key ||
-      query === `go to ${key}` ||
-      query === `open up ${key}` ||
-      query === `launch ${key}` ||
-      query.startsWith(`open ${key}`) && query.replace(`open ${key}`, '').trim().length === 0
-    ) {
+    const regex = new RegExp(`^(open|go to|launch|open up)?\\s*${key}\\s*$`, 'i');
+    if (regex.test(query)) {
       return {
         spokenResponse: `Opening ${key.charAt(0).toUpperCase() + key.slice(1)}.`,
         actionType: 'OPEN_WEBSITE',
