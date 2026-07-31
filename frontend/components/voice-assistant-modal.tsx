@@ -168,6 +168,7 @@ export function VoiceAssistantModal({
   // Contact disambiguation state for smart call routing
   const [disambiguationContacts, setDisambiguationContacts] = useState<Contact[]>([]);
   const [pendingCallName, setPendingCallName] = useState<string>('');
+  const [disambiguationMode, setDisambiguationMode] = useState<'tel' | 'whatsapp'>('tel');
 
   // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
   const unlockMobileAudio = useCallback(() => {
@@ -351,7 +352,6 @@ export function VoiceAssistantModal({
 
       // --- DISAMBIGUATION SELECTION (user choosing from a list of matching contacts) ---
       if (disambiguationContacts.length > 0) {
-        // Ordinal selection: "the 1st one", "number 2", "2", "second", "third one"
         const ordinalMap: Record<string, number> = {
           '1': 0, 'first': 0, '1st': 0, 'one': 0,
           '2': 0, 'second': 1, '2nd': 1, 'two': 1,
@@ -360,33 +360,36 @@ export function VoiceAssistantModal({
           '5': 4, 'fifth': 4, '5th': 4, 'five': 4,
         };
 
-        // Check ordinal match
         const words = q.replace(/^(the\s+|number\s+)/gi, '').trim();
         const ordIdx = ordinalMap[words];
+        let chosen: Contact | undefined;
+
         if (ordIdx !== undefined && ordIdx < disambiguationContacts.length) {
-          const chosen = disambiguationContacts[ordIdx];
+          chosen = disambiguationContacts[ordIdx];
+        } else {
+          chosen = disambiguationContacts.find(
+            (c) => c.name.toLowerCase() === q || c.name.toLowerCase().includes(q) || q.includes(c.name.toLowerCase().split(' ')[0])
+          );
+        }
+
+        if (chosen) {
+          const mode = disambiguationMode;
           setDisambiguationContacts([]);
           setPendingCallName('');
-          window.location.href = `tel:${chosen.phone}`;
-          setActionNotice(`📞 Calling ${chosen.name}`);
-          speakVoiceResponse(`Calling ${chosen.name} now, ${userName}. Any other command?`);
+
+          const cleanPhone = chosen.phone.replace(/\D/g, '');
+          if (mode === 'whatsapp') {
+            safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
+            setActionNotice(`💬 WhatsApp Call ${chosen.name}`);
+            speakVoiceResponse(`Opening WhatsApp call for ${chosen.name}, ${userName}. Any other command?`);
+          } else {
+            window.location.href = `tel:${chosen.phone}`;
+            setActionNotice(`📞 Calling ${chosen.name}`);
+            speakVoiceResponse(`Calling ${chosen.name} now, ${userName}. Any other command?`);
+          }
           return true;
         }
 
-        // Check full name match from the list
-        const nameMatch = disambiguationContacts.find(
-          (c) => c.name.toLowerCase() === q || c.name.toLowerCase().includes(q)
-        );
-        if (nameMatch) {
-          setDisambiguationContacts([]);
-          setPendingCallName('');
-          window.location.href = `tel:${nameMatch.phone}`;
-          setActionNotice(`📞 Calling ${nameMatch.name}`);
-          speakVoiceResponse(`Calling ${nameMatch.name} now, ${userName}. Any other command?`);
-          return true;
-        }
-
-        // "Cancel" / "never mind"
         if (q === 'cancel' || q === 'never mind' || q === 'nevermind' || q === 'none') {
           setDisambiguationContacts([]);
           setPendingCallName('');
@@ -396,43 +399,54 @@ export function VoiceAssistantModal({
         }
       }
 
-      // --- SMART PHONE CALL WITH CONTACT DISAMBIGUATION ---
-      // Handles: "call Thanoj", "phone Thanoj", "dial Thanoj", "ring Thanoj"
-      const callMatch = q.match(/^(?:call|phone|dial|ring)\s+(.+)/i);
-      if (callMatch) {
-        const searchName = callMatch[1].replace(/\s*(please|for me|now)\s*$/gi, '').trim();
+      // --- SMART PHONE & WHATSAPP CALL WITH FUZZY DISAMBIGUATION ---
+      // Handles: "call Thanoj", "whatsapp call Thanoj", "video call Thanoj", "call Thanoj on whatsapp"
+      const isWhatsAppCall = q.includes('whatsapp') || q.includes('video call');
+      const callMatch = q.match(/^(?:call|phone|dial|ring|whatsapp\s+call|video\s+call)\s+(.+)/i) || (q.includes('call') ? q.match(/call\s+([a-zA-Z0-9_\s]+)/i) : null);
 
-        if (!searchName) {
-          speakVoiceResponse(`Who would you like me to call, ${userName}?`);
-          return true;
-        }
+      if (callMatch) {
+        let searchName = callMatch[1]
+          .replace(/\s+(on\s+whatsapp|via\s+whatsapp|whatsapp|please|for me|now)\s*$/gi, '')
+          .replace(/^(on\s+whatsapp|via\s+whatsapp)\s+/gi, '')
+          .trim();
+
+        if (!searchName || searchName === 'whatsapp') return false;
 
         const matches = searchContacts(searchName);
 
         if (matches.length === 0) {
           setActionNotice(`❌ No contact: "${searchName}"`);
-          speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. Please check the name or add them to your contacts.`);
+          speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. You can add them or sync your device contacts.`);
           return true;
         }
 
         if (matches.length === 1) {
-          // Single match → dial immediately
           const contact = matches[0];
-          window.location.href = `tel:${contact.phone}`;
-          setActionNotice(`📞 Calling ${contact.name}`);
-          speakVoiceResponse(`Calling ${contact.name} now, ${userName}. Any other command?`);
+          const cleanPhone = contact.phone.replace(/\D/g, '');
+
+          if (isWhatsAppCall) {
+            safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
+            setActionNotice(`💬 WhatsApp Call ${contact.name}`);
+            speakVoiceResponse(`Opening WhatsApp call for ${contact.name}, ${userName}. Any other command?`);
+          } else {
+            window.location.href = `tel:${contact.phone}`;
+            setActionNotice(`📞 Calling ${contact.name}`);
+            speakVoiceResponse(`Calling ${contact.name} now, ${userName}. Any other command?`);
+          }
           return true;
         }
 
-        // Multiple matches → show disambiguation list and ask user to choose
-        setDisambiguationContacts(matches.slice(0, 5)); // Max 5 options
+        // Multiple matches → show disambiguation list and prompt user
+        setDisambiguationContacts(matches.slice(0, 5));
         setPendingCallName(searchName);
+        setDisambiguationMode(isWhatsAppCall ? 'whatsapp' : 'tel');
 
         const nameList = matches.slice(0, 5).map((c, i) => `${i + 1}. ${c.name}`).join(', ');
+        const callTypeLabel = isWhatsAppCall ? 'WhatsApp call' : 'call';
         setActionNotice(`📱 Found ${matches.length} contacts for "${searchName}"`);
         speakVoiceResponse(
           `I found ${matches.length} contacts matching ${searchName}: ${nameList}. ` +
-          `Which one would you like to call, ${userName}? Say the number or the full name.`
+          `Which one would you like to ${callTypeLabel}, ${userName}? Say the number or name.`
         );
         return true;
       }
