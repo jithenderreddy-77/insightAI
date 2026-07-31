@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2 } from 'lucide-react';
+import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
+import { searchContacts, syncDeviceContacts, type Contact } from '@/lib/contacts-store';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -159,8 +160,14 @@ export function VoiceAssistantModal({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('insight_automation_permissions_granted', 'true');
+      // Try to sync device contacts on first mount (only works on Chrome Android 80+)
+      syncDeviceContacts().catch(() => {});
     }
   }, []);
+
+  // Contact disambiguation state for smart call routing
+  const [disambiguationContacts, setDisambiguationContacts] = useState<Contact[]>([]);
+  const [pendingCallName, setPendingCallName] = useState<string>('');
 
   // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
   const unlockMobileAudio = useCallback(() => {
@@ -339,6 +346,109 @@ export function VoiceAssistantModal({
       if (q === 'minimize' || q === 'go to background' || q === 'hide') {
         setIsMinimized(true);
         speakVoiceResponse(`Going to background, ${userName}. Touch logo anytime to expand.`);
+        return true;
+      }
+
+      // --- DISAMBIGUATION SELECTION (user choosing from a list of matching contacts) ---
+      if (disambiguationContacts.length > 0) {
+        // Ordinal selection: "the 1st one", "number 2", "2", "second", "third one"
+        const ordinalMap: Record<string, number> = {
+          '1': 0, 'first': 0, '1st': 0, 'one': 0,
+          '2': 0, 'second': 1, '2nd': 1, 'two': 1,
+          '3': 2, 'third': 2, '3rd': 2, 'three': 2,
+          '4': 3, 'fourth': 3, '4th': 3, 'four': 3,
+          '5': 4, 'fifth': 4, '5th': 4, 'five': 4,
+        };
+
+        // Check ordinal match
+        const words = q.replace(/^(the\s+|number\s+)/gi, '').trim();
+        const ordIdx = ordinalMap[words];
+        if (ordIdx !== undefined && ordIdx < disambiguationContacts.length) {
+          const chosen = disambiguationContacts[ordIdx];
+          setDisambiguationContacts([]);
+          setPendingCallName('');
+          window.location.href = `tel:${chosen.phone}`;
+          setActionNotice(`📞 Calling ${chosen.name}`);
+          speakVoiceResponse(`Calling ${chosen.name} now, ${userName}. Any other command?`);
+          return true;
+        }
+
+        // Check full name match from the list
+        const nameMatch = disambiguationContacts.find(
+          (c) => c.name.toLowerCase() === q || c.name.toLowerCase().includes(q)
+        );
+        if (nameMatch) {
+          setDisambiguationContacts([]);
+          setPendingCallName('');
+          window.location.href = `tel:${nameMatch.phone}`;
+          setActionNotice(`📞 Calling ${nameMatch.name}`);
+          speakVoiceResponse(`Calling ${nameMatch.name} now, ${userName}. Any other command?`);
+          return true;
+        }
+
+        // "Cancel" / "never mind"
+        if (q === 'cancel' || q === 'never mind' || q === 'nevermind' || q === 'none') {
+          setDisambiguationContacts([]);
+          setPendingCallName('');
+          setActionNotice(null);
+          speakVoiceResponse(`Cancelled, ${userName}. What else can I help with?`);
+          return true;
+        }
+      }
+
+      // --- SMART PHONE CALL WITH CONTACT DISAMBIGUATION ---
+      // Handles: "call Thanoj", "phone Thanoj", "dial Thanoj", "ring Thanoj"
+      const callMatch = q.match(/^(?:call|phone|dial|ring)\s+(.+)/i);
+      if (callMatch) {
+        const searchName = callMatch[1].replace(/\s*(please|for me|now)\s*$/gi, '').trim();
+
+        if (!searchName) {
+          speakVoiceResponse(`Who would you like me to call, ${userName}?`);
+          return true;
+        }
+
+        const matches = searchContacts(searchName);
+
+        if (matches.length === 0) {
+          setActionNotice(`❌ No contact: "${searchName}"`);
+          speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. Please check the name or add them to your contacts.`);
+          return true;
+        }
+
+        if (matches.length === 1) {
+          // Single match → dial immediately
+          const contact = matches[0];
+          window.location.href = `tel:${contact.phone}`;
+          setActionNotice(`📞 Calling ${contact.name}`);
+          speakVoiceResponse(`Calling ${contact.name} now, ${userName}. Any other command?`);
+          return true;
+        }
+
+        // Multiple matches → show disambiguation list and ask user to choose
+        setDisambiguationContacts(matches.slice(0, 5)); // Max 5 options
+        setPendingCallName(searchName);
+
+        const nameList = matches.slice(0, 5).map((c, i) => `${i + 1}. ${c.name}`).join(', ');
+        setActionNotice(`📱 Found ${matches.length} contacts for "${searchName}"`);
+        speakVoiceResponse(
+          `I found ${matches.length} contacts matching ${searchName}: ${nameList}. ` +
+          `Which one would you like to call, ${userName}? Say the number or the full name.`
+        );
+        return true;
+      }
+
+      // --- SYNC CONTACTS COMMAND ---
+      if (q.includes('sync contacts') || q.includes('import contacts') || q.includes('load contacts')) {
+        setActionNotice('📱 Syncing device contacts...');
+        syncDeviceContacts().then((synced) => {
+          if (synced.length > 0) {
+            speakVoiceResponse(`Synced ${synced.length} contacts from your device, ${userName}. Any other command?`);
+            setActionNotice(`✅ Synced ${synced.length} contacts`);
+          } else {
+            speakVoiceResponse(`Contact sync isn't available on this browser, ${userName}. You can manually add contacts. Any other command?`);
+            setActionNotice('⚠️ Sync unavailable');
+          }
+        });
         return true;
       }
 
@@ -889,6 +999,42 @@ export function VoiceAssistantModal({
             )}
           </div>
 
+          {/* Contact Disambiguation List Card */}
+          {disambiguationContacts.length > 0 && (
+            <div className="w-full p-3 rounded-2xl bg-slate-900/90 border border-cyan-500/40 text-left space-y-2 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  <Phone className="w-3.5 h-3.5" /> Found {disambiguationContacts.length} Contacts
+                </span>
+                <span className="text-[10px] text-slate-400">Say number or tap</span>
+              </div>
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {disambiguationContacts.map((c, i) => (
+                  <button
+                    key={c.id || i}
+                    onClick={() => {
+                      setDisambiguationContacts([]);
+                      setPendingCallName('');
+                      window.location.href = `tel:${c.phone}`;
+                      setActionNotice(`📞 Calling ${c.name}`);
+                      speakVoiceResponse(`Calling ${c.name} now, ${getUserFirstName()}. Any other command?`);
+                    }}
+                    className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-800/80 hover:bg-cyan-500/20 border border-slate-700 hover:border-cyan-500/50 transition-all text-xs group"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[10px] font-bold">
+                        {i + 1}
+                      </span>
+                      <span className="font-semibold text-slate-200 group-hover:text-cyan-200 truncate">{c.name}</span>
+                      {c.label && <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-400">{c.label}</span>}
+                    </div>
+                    <span className="text-[11px] font-mono text-cyan-400/90 shrink-0 ml-2">{c.phone}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Recent Commands */}
           {commandLog.length > 0 && (
             <div className="w-full pt-2 border-t border-slate-800/60">
@@ -903,7 +1049,7 @@ export function VoiceAssistantModal({
 
           {/* Hint */}
           <p className="text-[10px] text-slate-500 text-center">
-            Say &quot;Open YouTube&quot;, &quot;Send WhatsApp message Hello&quot;, &quot;Compose Gmail&quot;, &quot;Minimize&quot;, or &quot;Stop&quot;
+            Say &quot;Call Thanoj&quot;, &quot;Open YouTube&quot;, &quot;Send WhatsApp message Hello&quot;, &quot;Minimize&quot;, or &quot;Stop&quot;
           </p>
         </div>
       </div>
