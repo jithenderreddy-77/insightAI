@@ -148,15 +148,14 @@ export async function POST(req: Request) {
       }
     }
 
-    const docs = uniqueTopDocs;
-
-    // Build clean context block
-    const context = docs
-      .map((doc: any, i: number) => {
-        const sourceName = doc.metadata?.filename || doc.metadata?.source || 'Uploaded Document';
-        return `[DOCUMENT SOURCE: ${sourceName} — Passage ${i + 1}]\n${doc.content}`;
+    // Build Context with Parent-Child Retrieval:
+    // Uses metadata.parentText (1,500 chars surrounding context) when available for max precision + context!
+    const context = uniqueTopDocs
+      .map((d, i) => {
+        const docText = d.metadata?.parentText || d.content || '';
+        const fn = d.metadata?.filename || d.metadata?.source || `Document ${i + 1}`;
+        return `--- DOCUMENT SOURCE: ${fn} ---\n${docText}`;
       })
-      .filter(Boolean)
       .join('\n\n---\n\n');
 
     const mermaidInstructions = [
@@ -563,6 +562,26 @@ async function getQueryEmbedding(
         if (res.ok) {
           const data = await res.json();
           return data.embedding;
+        }
+      } catch {}
+    }
+
+    if (openaiApiKey && !useLocalOffline) {
+      try {
+        const res = await fetch('https://api.openai.com/v1/embeddings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openaiApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'text-embedding-3-large',
+            input: text,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.data[0].embedding;
         }
       } catch {}
     }

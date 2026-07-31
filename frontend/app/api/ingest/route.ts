@@ -14,9 +14,9 @@ import { SupabaseVectorStore } from '@langchain/community/vectorstores/supabase'
 import { createClient } from '@supabase/supabase-js';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 
-// Configuration constants — Supports up to 500MB files
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB per file
-const MAX_FILES = 50; // up to 50 files simultaneously
+// Configuration constants — Supports up to 2GB files and 1000 files per batch
+const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB per file
+const MAX_FILES = 1000; // up to 1000 files simultaneously
 
 function isFileSupported(file: File): boolean {
   if (SUPPORTED_MIME_TYPES.includes(file.type)) {
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const allDocs: Document[] = [];
     const errors: string[] = [];
 
-    // Handle JSON payload (sent from client chunking for huge >4MB / 200MB+ files)
+    // Handle JSON payload (sent from client chunking for huge >4MB / 200MB+ / 2GB files)
     if (contentType.includes('application/json')) {
       const jsonBody = await request.json();
       const docsPayload = jsonBody.parsedDocuments || jsonBody.documents || [];
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
       if (files.length > MAX_FILES) {
         return NextResponse.json(
-          { error: `Too many files. Maximum ${MAX_FILES} files allowed.` },
+          { error: `Too many files. Maximum ${MAX_FILES} files allowed per batch.` },
           { status: 400 },
         );
       }
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
       if (invalidFiles.length > 0) {
         return NextResponse.json(
           {
-            error: `Invalid files found. Supported formats: PDF, DOC, DOCX, PPT, PPTX, TXT, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF, SVG. Max size per file: 500MB`,
+            error: `Invalid files found. Max size per file: 2GB. Max files: 1000.`,
             invalidFiles: invalidFiles.map((f) => f.name),
           },
           { status: 400 },
@@ -111,17 +111,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Split text into 1000 character chunks with 200 character overlap
-    // Larger chunks preserve context (e.g., resume experience sections stay together)
-    const textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 1000,
+    // --- PARENT-CHILD SEMANTIC CHUNKING ARCHITECTURE ---
+    // Parent Splitter (1,500 chars) = Full surrounding context for LLM
+    // Child Splitter (250 chars) = Pinpoint vector search accuracy
+    const parentSplitter = new RecursiveCharacterTextSplitter({
+      chunkSize: 1500,
       chunkOverlap: 200,
     });
 
-    const splitDocs = await textSplitter.splitDocuments(allDocs);
+    const childSplitter = new RecursiveCharacterTextSplitter({
+      chunkSize: 250,
+      chunkOverlap: 50,
+    });
+
+    const parentDocs = await parentSplitter.splitDocuments(allDocs);
+    const splitDocs: Document[] = [];
+
+    // For each parent section, generate linked child chunks carrying parentText in metadata
+    for (let i = 0; i < parentDocs.length; i++) {
+      const pDoc = parentDocs[i];
+      const parentText = pDoc.pageContent;
+      const parentId = `parent_${i}_${Date.now()}`;
+      const filename = (pDoc.metadata as any)?.filename || (pDoc.metadata as any)?.source || 'Uploaded File';
+
+      const childSubDocs = await childSplitter.splitDocuments([pDoc]);
+      for (const cDoc of childSubDocs) {
+        splitDocs.push(
+          new Document({
+            pageContent: cDoc.pageContent,
+            metadata: {
+              ...cDoc.metadata,
+              filename,
+              source: filename,
+              parentId,
+              parentText, // Full 1,500 char context linked to this 250 char child chunk
+            },
+          })
+        );
+      }
+    }
 
     const offlineParsedDocuments = splitDocs.map((d) => ({
-      text: d.pageContent,
+      text: (d.metadata as any)?.parentText || d.pageContent,
       filename: (d.metadata as any)?.filename || (d.metadata as any)?.source || 'Uploaded File',
     }));
 
@@ -132,7 +163,13 @@ export async function POST(request: NextRequest) {
         const cloudIngestPromise = (async () => {
           let embeddings: any;
 
-          if (nvidiaApiKey) {
+          if (openaiApiKey) {
+            // Upgrade to high-precision text-embedding-3-large (3072 dims) or fallback to text-embedding-3-small
+            embeddings = new OpenAIEmbeddings({
+              model: 'text-embedding-3-large',
+              apiKey: openaiApiKey,
+            });
+          } else if (nvidiaApiKey) {
             embeddings = {
               embedDocuments: async (texts: string[]): Promise<number[][]> => {
                 const batchSize = 50;
@@ -185,11 +222,6 @@ export async function POST(request: NextRequest) {
                 return [];
               },
             };
-          } else if (openaiApiKey) {
-            embeddings = new OpenAIEmbeddings({
-              model: 'text-embedding-3-small',
-              apiKey: openaiApiKey,
-            });
           }
 
           if (embeddings) {
@@ -201,7 +233,7 @@ export async function POST(request: NextRequest) {
             });
 
             // Store in vector store in parallel batches
-            const BATCH_SIZE = 25;
+            const BATCH_SIZE = 50;
             const insertPromises = [];
             for (let i = 0; i < splitDocs.length; i += BATCH_SIZE) {
               const batch = splitDocs.slice(i, i + BATCH_SIZE);
