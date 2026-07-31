@@ -3,9 +3,11 @@ export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 
+import { performWebSearch } from '@/lib/web-search';
+
 export async function POST(req: Request) {
   try {
-    const { transcript, hasActiveDocuments } = await req.json();
+    const { transcript, hasActiveDocuments, history = [] } = await req.json();
 
     if (!transcript || typeof transcript !== 'string') {
       return NextResponse.json({ error: 'Transcript is required' }, { status: 400 });
@@ -21,12 +23,40 @@ export async function POST(req: Request) {
       return NextResponse.json(directAction);
     }
 
-    // 2) AI Intent Parser using GPT-4o or NVIDIA API with Tool Calling
-    const systemPrompt = `You are "Insight Voice", a brilliant AI voice assistant that can both automate tasks AND answer any question with expert knowledge.
+    // 2) Check if query asks for live/real-time info (news, weather, sports, stock, prices, current events)
+    let liveWebContext = '';
+    const isLiveQuery =
+      queryLower.includes('weather') ||
+      queryLower.includes('news') ||
+      queryLower.includes('stock') ||
+      queryLower.includes('score') ||
+      queryLower.includes('price') ||
+      queryLower.includes('today') ||
+      queryLower.includes('latest') ||
+      queryLower.includes('current') ||
+      queryLower.includes('who is') ||
+      queryLower.includes('what is the price');
 
-MODES AND JSON RESPONSES:
+    if (isLiveQuery) {
+      try {
+        const webData = await performWebSearch(transcript);
+        if (webData.summary) {
+          liveWebContext = `\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 800)}\n`;
+        }
+      } catch (searchErr) {
+        console.log('Live web search skipped:', searchErr);
+      }
+    }
 
-1. OPEN WEBSITE OR YOUTUBE VIDEO:
+    // 3) AI Intent Parser using GPT-4o or NVIDIA DeepSeek v4 Pro
+    const systemPrompt = `You are "Insight Voice", an elite AI voice assistant modeled after Apple Siri and Google Assistant. You can automate tasks, answer any question with expert knowledge, handle multi-step requests, and carry out complex instructions.
+${liveWebContext}
+You MUST respond with a single valid JSON object (no markdown, no code fences, no extra text).
+
+MODES AND JSON RESPONSE FORMATS:
+
+1. OPEN WEBSITE / SEARCH / PLAY VIDEO:
+   Triggers: User explicitly says "open", "go to", "search for", "play", "watch", "visit", "navigate to"
    User: "Open YouTube and play iPhone 16 review" or "Search Google for Next.js 14" or "Open GitHub"
    JSON: {
      "spokenResponse": "Opening YouTube and searching for iPhone 16 review.",
@@ -36,41 +66,70 @@ MODES AND JSON RESPONSES:
    }
 
 2. INTERNAL APP AUTOMATION:
+   Triggers: User mentions uploading, new chat, history, signing in, installing
    User: "Upload document" / "New chat" / "Open history" / "Sign in" / "Install app"
    JSON: {
      "spokenResponse": "Opening document upload file picker.",
      "actionType": "APP_ACTION",
-     "appAction": "upload_document" // Options: upload_document, new_chat, open_history, open_auth, install_app
+     "appAction": "upload_document"
    }
+   Valid appAction values: upload_document, new_chat, open_history, open_auth, install_app
 
-3. DOCUMENT Q&A (If user asks about their document/PDF/resume):
+3. DOCUMENT Q&A (If user asks about their uploaded document/PDF/resume):
    User: "Summarize my uploaded resume" or "What are the key points in the document?"
    JSON: {
-     "spokenResponse": "Checking your uploaded document now.",
+     "spokenResponse": "Analyzing your document now.",
      "actionType": "DOCUMENT_QA",
      "query": "Summarize my uploaded resume"
    }
 
-4. KNOWLEDGE ANSWER (For ANY question, doubt, theory, fact, explanation):
-   User: "What is machine learning?" / "Explain quantum physics" / "Who is the president of the US?" / "Tell me about React hooks" / "How does photosynthesis work?"
+4. KNOWLEDGE ANSWER (For ANY question, doubt, theory, fact, math, coding, science, history, trivia, explanation, definition, comparison, how-to, tutorial, etc.):
+   THIS IS YOUR DEFAULT MODE. If the user asks ANY question or wants information, use this mode.
+   User: "What is machine learning?" / "Explain quantum physics" / "Who is the president of the US?" / "How does photosynthesis work?" / "Write a Python function to reverse a string" / "Compare React vs Vue" / "What are the side effects of ibuprofen?"
    JSON: {
      "spokenResponse": "Machine learning is a subset of artificial intelligence where computers learn patterns from data without being explicitly programmed. It uses algorithms like neural networks, decision trees, and support vector machines to make predictions and decisions.",
      "actionType": "KNOWLEDGE_ANSWER"
    }
 
-5. GENERAL CONVERSATION:
-   User: "Hi" / "How are you?" / "Who created you?" / "What can you do?"
+5. MULTI-STEP / COMPLEX TASKS:
+   If the user gives a multi-part instruction, break it into the MOST IMPORTANT single action and answer.
+   User: "Tell me about React and then open the documentation"
    JSON: {
-     "spokenResponse": "Hi there! I'm Insight Voice, your AI assistant. I can answer any question, open apps, search the web, analyze documents, and much more. Just ask me anything!",
+     "spokenResponse": "React is a JavaScript library for building user interfaces using a component-based architecture. It uses a virtual DOM for efficient rendering. Opening the React documentation now.",
+     "actionType": "OPEN_WEBSITE",
+     "targetUrl": "https://react.dev",
+     "searchQuery": "React documentation"
+   }
+
+6. GENERAL CONVERSATION:
+   User: "Hi" / "How are you?" / "Who created you?" / "What can you do?" / "Thank you" / "Good morning"
+   JSON: {
+     "spokenResponse": "Hi there! I'm Insight Voice, your AI assistant. I can answer any question, open apps, search the web, analyze documents, do math, write code, and much more. Just ask me anything!",
      "actionType": "GENERAL_CHAT"
    }
 
 CRITICAL RULES:
-- Output ONLY a valid JSON object matching one of the 5 formats above. Do NOT include markdown code fences or extra text.
-- For KNOWLEDGE_ANSWER: Give a REAL, DETAILED, ACCURATE answer in 2-4 sentences. You are an expert — answer the question directly and thoroughly. Do NOT say "I don't know" or "Search Google for this".
-- For GENERAL_CHAT: Be warm, friendly, and natural.
+- Output ONLY a valid JSON object. No markdown, no code fences, no explanation outside the JSON.
+- For KNOWLEDGE_ANSWER: Give a REAL, DETAILED, ACCURATE, EXPERT-LEVEL answer in 2-4 sentences. You are a world-class expert. Answer directly and thoroughly. NEVER say "I don't know" or "Search Google" — always provide your best answer.
+- For GENERAL_CHAT: Be warm, friendly, enthusiastic, and natural — like a smart human friend.
 - For automation actions (OPEN_WEBSITE, APP_ACTION): Keep spoken responses concise (under 15 words).
-- ALWAYS prefer KNOWLEDGE_ANSWER over OPEN_WEBSITE for factual questions. Only use OPEN_WEBSITE when the user explicitly asks to open/search/visit something.`;
+- ALWAYS prefer KNOWLEDGE_ANSWER over OPEN_WEBSITE for factual questions. Only use OPEN_WEBSITE when the user EXPLICITLY asks to open/search/visit/play something.
+- Use previous conversation history if provided to resolve follow-up questions (e.g. "Who is Sundar Pichai?" followed by "How old is he?").
+- If unsure between modes, default to KNOWLEDGE_ANSWER.`;
+
+    // Format recent history for LLM context (up to 4 previous messages)
+    const recentHistory = Array.isArray(history)
+      ? history.slice(-4).map((h: any) => ({
+          role: h.role === 'user' ? 'user' : 'assistant',
+          content: typeof h.content === 'string' ? h.content : JSON.stringify(h.content),
+        }))
+      : [];
+
+    const messagesPayload = [
+      { role: 'system', content: systemPrompt },
+      ...recentHistory,
+      { role: 'user', content: transcript },
+    ];
 
     if (openaiApiKey) {
       try {
@@ -82,13 +141,10 @@ CRITICAL RULES:
           },
           body: JSON.stringify({
             model: 'gpt-4o',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: transcript },
-            ],
+            messages: messagesPayload,
             response_format: { type: 'json_object' },
             temperature: 0.1,
-            max_tokens: 300,
+            max_tokens: 350,
           }),
         });
 
@@ -114,13 +170,10 @@ CRITICAL RULES:
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'meta/llama-3.1-8b-instruct',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: transcript },
-            ],
+            model: process.env.NVIDIA_MODEL || 'deepseek-ai/deepseek-v4-pro',
+            messages: messagesPayload,
             temperature: 0.1,
-            max_tokens: 300,
+            max_tokens: 500,
           }),
         });
 
@@ -343,8 +396,11 @@ function matchDirectPattern(query: string, hasActiveDocs: boolean) {
 
 /**
  * Intelligent Fallback Action Generator
+ * Now defaults to KNOWLEDGE_ANSWER instead of always redirecting to Google search.
+ * This makes the voice assistant act more like Siri/Alexa — answering questions directly.
  */
 function generateFallbackAction(query: string, rawTranscript: string, hasActiveDocs: boolean) {
+  // Explicit "open" or "go to" commands → website action
   if (query.startsWith('open ') || query.startsWith('go to ')) {
     const target = query.replace(/^open /g, '').replace(/^go to /g, '').trim();
     if (target.includes('.') && !target.includes(' ')) {
@@ -365,6 +421,7 @@ function generateFallbackAction(query: string, rawTranscript: string, hasActiveD
     };
   }
 
+  // Document-related queries → DOCUMENT_QA
   if (hasActiveDocs && (query.includes('document') || query.includes('pdf') || query.includes('resume') || query.includes('summary'))) {
     return {
       spokenResponse: 'Querying your uploaded documents.',
@@ -373,11 +430,32 @@ function generateFallbackAction(query: string, rawTranscript: string, hasActiveD
     };
   }
 
-  const encoded = encodeURIComponent(rawTranscript);
+  // Explicit search commands → Google search
+  if (query.startsWith('search ') || query.startsWith('look up ') || query.startsWith('find ')) {
+    const searchTerm = query.replace(/^(search|look up|find)\s+(for\s+)?/g, '').trim();
+    const encoded = encodeURIComponent(searchTerm || rawTranscript);
+    return {
+      spokenResponse: `Searching Google for ${searchTerm || rawTranscript}.`,
+      actionType: 'OPEN_WEBSITE',
+      targetUrl: `https://www.google.com/search?q=${encoded}`,
+      searchQuery: searchTerm || rawTranscript,
+    };
+  }
+
+  // Greetings
+  const greetings = ['hi', 'hello', 'hey', 'good morning', 'good evening', 'good afternoon', 'howdy', 'whats up', 'sup'];
+  if (greetings.some(g => query === g || query.startsWith(g + ' '))) {
+    return {
+      spokenResponse: "Hello! I'm Insight Voice, your AI assistant. Ask me anything or tell me to open an app!",
+      actionType: 'GENERAL_CHAT',
+    };
+  }
+
+  // DEFAULT: Treat as a knowledge question → send to chat AI for a real answer
+  // This is the key improvement: instead of redirecting to Google, we let the chat AI answer.
   return {
-    spokenResponse: `Searching Google for ${rawTranscript}.`,
-    actionType: 'OPEN_WEBSITE',
-    targetUrl: `https://www.google.com/search?q=${encoded}`,
-    searchQuery: rawTranscript,
+    spokenResponse: `Let me think about that. I'll answer in the chat.`,
+    actionType: 'KNOWLEDGE_ANSWER',
+    query: rawTranscript,
   };
 }

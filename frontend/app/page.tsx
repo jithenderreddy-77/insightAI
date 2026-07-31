@@ -374,7 +374,7 @@ export default function Home() {
         title: voiceMessage.slice(0, 40) + (voiceMessage.length > 40 ? '...' : ''),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        messageCount: 2,
+        messages: [],
         fileNames: files.map((f) => f.name),
       });
       loadThreadsForUser(user.id);

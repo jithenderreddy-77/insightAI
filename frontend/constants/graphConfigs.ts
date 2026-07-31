@@ -4,7 +4,7 @@ type StreamConfigurables = AgentConfiguration;
 type IndexConfigurables = IndexConfiguration;
 
 export const retrievalAssistantStreamConfig: StreamConfigurables = {
-  queryModel: 'nvidia/meta/llama-3.1-8b-instruct',
+  queryModel: 'nvidia/deepseek-ai/deepseek-v4-pro',
   retrieverProvider: 'supabase',
   k: 5,
 };

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2 } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
+import { getSavedUser } from '@/lib/history-store';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -139,38 +140,127 @@ export function VoiceAssistantModal({
     }
   }, []);
 
-  // --- TEXT-TO-SPEECH ---
-  const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      if (onComplete) onComplete();
-      return;
+  const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = useRef<boolean>(false);
+
+  // --- GET ACTIVE USER FIRST NAME ---
+  const getUserFirstName = useCallback((): string => {
+    if (typeof window === 'undefined') return 'friend';
+    try {
+      const user = getSavedUser();
+      if (user?.displayName) return user.displayName.split(' ')[0];
+      if (user?.username) return user.username.split('@')[0];
+    } catch {}
+    return 'friend';
+  }, []);
+
+  // One-time automatic permission initialization
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('insight_automation_permissions_granted', 'true');
     }
-    window.speechSynthesis.cancel();
+  }, []);
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.15;
-    utterance.pitch = 1.0;
+  // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
+  const unlockMobileAudio = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    try {
+      const silentAudio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+      silentAudio.play().then(() => {
+        audioUnlockedRef.current = true;
+      }).catch(() => {});
+    } catch {}
+  }, []);
 
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(
-      (v) => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Siri') || v.name.includes('Samantha'))
-    ) || voices.find((v) => v.lang.startsWith('en'));
-    if (preferredVoice) utterance.voice = preferredVoice;
+  // --- TEXT-TO-SPEECH (OpenAI HD Voice with Browser SpeechSynthesis Fallback) ---
+  const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
+    unlockMobileAudio();
+
+    // Cancel any active speech or audio
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (audioRef.current) {
+      try { audioRef.current.pause(); audioRef.current = null; } catch {}
+    }
 
     setAssistantState('speaking');
     setSpokenText(text);
 
-    utterance.onend = () => {
-      if (onComplete) onComplete();
-      restartContinuousListening();
-    };
-    utterance.onerror = () => {
-      if (onComplete) onComplete();
-      restartContinuousListening();
+    // Try OpenAI HD TTS API first for realistic Siri/Alexa human voice
+    const fetchOpenAITTS = async (): Promise<boolean> => {
+      try {
+        const res = await fetch('/api/voice-assistant/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: 'nova' }),
+        });
+
+        if (res.ok) {
+          const blob = await res.blob();
+          const audioUrl = URL.createObjectURL(blob);
+          const audio = new Audio(audioUrl);
+          audioRef.current = audio;
+
+          audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            audioRef.current = null;
+            if (onComplete) onComplete();
+            restartContinuousListening();
+          };
+
+          audio.onerror = () => {
+            URL.revokeObjectURL(audioUrl);
+            audioRef.current = null;
+            fallbackWebSpeech(text, onComplete);
+          };
+
+          await audio.play();
+          return true;
+        }
+      } catch (err) {
+        console.log('OpenAI TTS unavailable, using browser speech fallback:', err);
+      }
+      return false;
     };
 
-    window.speechSynthesis.speak(utterance);
-  }, []);
+    // Fallback to browser SpeechSynthesis API
+    const fallbackWebSpeech = (speechText: string, cb?: () => void) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        if (cb) cb();
+        restartContinuousListening();
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(speechText);
+      utterance.rate = 1.15;
+      utterance.pitch = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const preferredVoice = voices.find(
+        (v) => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Siri') || v.name.includes('Samantha'))
+      ) || voices.find((v) => v.lang.startsWith('en'));
+      if (preferredVoice) utterance.voice = preferredVoice;
+
+      utterance.onend = () => {
+        if (cb) cb();
+        restartContinuousListening();
+      };
+      utterance.onerror = () => {
+        if (cb) cb();
+        restartContinuousListening();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    };
+
+    fetchOpenAITTS().then((success) => {
+      if (!success) {
+        fallbackWebSpeech(text, onComplete);
+      }
+    });
+  }, [unlockMobileAudio]);
 
   // --- RESTART CONTINUOUS LISTENING ---
   const restartContinuousListening = useCallback(() => {
@@ -193,87 +283,119 @@ export function VoiceAssistantModal({
       const q = query.toLowerCase().replace(/[.,!?;:]/g, '').replace(/\s+/g, ' ').trim();
       if (!q) return false;
 
+      const userName = getUserFirstName();
+
+      // "Come back" / "Go back" navigation control
+      if (q === 'come back' || q === 'go back' || q === 'previous step' || q === 'back' || q === 'return') {
+        setIsMinimized(false);
+        setActionNotice(`↩️ Returned`);
+        speakVoiceResponse(`Coming back to the main voice screen, ${userName}. What's your next command?`);
+        return true;
+      }
+
+      // Exit / Stop / No thanks / Done
+      if (
+        q === 'no' || q === 'nothing' || q === 'no thanks' || q === 'thats all' || q === 'that is all' ||
+        q === 'stop' || q === 'close' || q === 'exit' || q === 'quit' || q === 'shut down' || q === 'goodbye' || q === 'bye' || q === 'done'
+      ) {
+        speakVoiceResponse(`Alright ${userName}! Stopping now. Call me anytime!`);
+        setTimeout(() => onClose(), 1500);
+        return true;
+      }
+
       // App Actions (don't close modal — stay in background)
       if (q.includes('upload') || q.includes('add file') || q.includes('add pdf') || q.includes('select document')) {
         setActionNotice('✅ Opening file picker...');
         onTriggerUpload();
-        speakVoiceResponse('Opening document upload picker.');
+        speakVoiceResponse(`Opening document upload picker, ${userName}. Any other commands?`);
         return true;
       }
       if (q.includes('new chat') || q.includes('start chat') || q.includes('clear chat') || q.includes('reset session')) {
         setActionNotice('✅ Starting new chat...');
         onNewChat();
-        speakVoiceResponse('Starting a new chat session.');
+        speakVoiceResponse(`Starting a new chat session for you, ${userName}. What would you like to explore next?`);
         return true;
       }
       if (q.includes('history') || q.includes('past chat') || q.includes('saved chat')) {
         setActionNotice('✅ Opening history...');
         onOpenHistory();
-        speakVoiceResponse('Opening your chat and file history.');
+        speakVoiceResponse(`Opening your chat and file history, ${userName}. Any other command?`);
         return true;
       }
       if (q.includes('sign in') || q.includes('login') || q.includes('register') || q.includes('create account')) {
         setActionNotice('✅ Opening sign in...');
         onOpenAuth();
-        speakVoiceResponse('Opening sign in window.');
+        speakVoiceResponse(`Opening sign in window, ${userName}.`);
         return true;
       }
       if (q.includes('install app') || q.includes('download app')) {
         setActionNotice('✅ App installer launched');
         onInstallApp();
-        speakVoiceResponse('Launching app installer.');
-        return true;
-      }
-
-      // Stop / Close assistant
-      if (q === 'stop' || q === 'close' || q === 'exit' || q === 'quit' || q === 'shut down' || q === 'goodbye' || q === 'bye') {
-        speakVoiceResponse('Goodbye! Closing Insight Voice.');
-        setTimeout(() => onClose(), 1500);
+        speakVoiceResponse(`Launching app installer, ${userName}.`);
         return true;
       }
 
       // Minimize
       if (q === 'minimize' || q === 'go to background' || q === 'hide') {
         setIsMinimized(true);
-        speakVoiceResponse('Going to background.');
+        speakVoiceResponse(`Going to background, ${userName}. Touch logo anytime to expand.`);
         return true;
       }
 
-      // WhatsApp Messaging (Native App + Web Deep Link)
-      if (q.includes('whatsapp') && (q.includes('message') || q.includes('send') || q.includes('saying') || q.includes('text'))) {
+      // --- ADVANCED CONTACT CHAT & WHATSAPP AUTOMATION ---
+      // Handles: "open Thanoj chat", "open chat of Thanoj", "message Thanoj saying meeting at 5", "send whatsapp to Thanoj Hi"
+      if (q.includes('whatsapp') || q.includes('chat') || q.includes('message')) {
+        const contactMatch = q.match(/(?:chat\s+(?:with|of)?|message|to|send\s+(?:a\s+)?(?:whatsapp\s+)?message\s+to|open\s+chat\s+of)\s+([a-zA-Z0-9_-]+)/i);
+        let contactName = contactMatch ? contactMatch[1].trim() : '';
+
+        // Clean out common non-name words
+        if (['the', 'a', 'an', 'app', 'chat', 'message', 'my', 'whatsapp'].includes(contactName.toLowerCase())) {
+          contactName = '';
+        }
+
         let msg = q
-          .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
-          .replace(/^open\s+whatsapp\s+(and\s+)?(send\s+)?/gi, '')
+          .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(to\s+[a-zA-Z0-9_-]+\s+)?(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
+          .replace(/^open\s+(chat\s+of\s+|whatsapp\s+chat\s+for\s+)?/gi, '')
           .replace(/\s+on\s+whatsapp$/gi, '')
           .trim();
-        const webUrl = msg && msg !== 'whatsapp'
-          ? `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`
-          : 'https://web.whatsapp.com';
-        const nativeScheme = msg && msg !== 'whatsapp'
-          ? `whatsapp://send?text=${encodeURIComponent(msg)}`
-          : 'whatsapp://';
 
-        setActionNotice(`✅ WhatsApp App: ${msg || 'Opened'}`);
-        safeOpenUrl(webUrl, nativeScheme);
-        speakVoiceResponse(msg ? `Opening WhatsApp app to send message.` : 'Opening WhatsApp app.');
-        return true;
+        if (contactName || msg) {
+          const textToInsert = msg || `Hi ${contactName || ''}`;
+          const webUrl = `https://web.whatsapp.com/send?text=${encodeURIComponent(textToInsert)}`;
+          const nativeScheme = `whatsapp://send?text=${encodeURIComponent(textToInsert)}`;
+
+          const targetLabel = contactName ? `Chat with ${contactName}` : 'WhatsApp';
+          setActionNotice(`✅ WhatsApp: ${targetLabel}`);
+          safeOpenUrl(webUrl, nativeScheme);
+
+          if (contactName) {
+            speakVoiceResponse(`Opening WhatsApp chat for ${contactName}, ${userName}. Is there any other command?`);
+          } else {
+            speakVoiceResponse(`Opening WhatsApp app to send message, ${userName}. Any other command?`);
+          }
+          return true;
+        }
       }
 
-      // Gmail Compose (Native Mail App + Web Deep Link)
+      // --- GMAIL COMPOSE AUTOMATION ---
       if ((q.includes('gmail') || q.includes('email')) && (q.includes('send') || q.includes('compose') || q.includes('write') || q.includes('saying'))) {
+        const contactMatch = q.match(/(?:to|write\s+to|send\s+(?:an?\s+)?(?:gmail|email)\s+to)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+)/i);
+        const contactName = contactMatch ? contactMatch[1].trim() : '';
+
         let msg = q
           .replace(/^(send\s+)?(a\s+)?(gmail|email)\s+(message\s+)?(saying\s+)?/gi, '')
           .replace(/^compose\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
           .replace(/^write\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
           .trim();
+
         const webUrl = msg && msg !== 'gmail' && msg !== 'email'
           ? `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent(msg)}`
           : 'https://mail.google.com/mail/?view=cm&fs=1';
         const nativeScheme = msg ? `mailto:?body=${encodeURIComponent(msg)}` : 'googlegmail://';
 
-        setActionNotice(`✅ Gmail App opened`);
+        setActionNotice(`✅ Gmail: ${contactName || 'Opened'}`);
         safeOpenUrl(webUrl, nativeScheme);
-        speakVoiceResponse('Opening Gmail app.');
+        speakVoiceResponse(contactName ? `Opening Gmail to compose message for ${contactName}, ${userName}. Any other command?` : `Opening Gmail app, ${userName}. Any other command?`);
         return true;
       }
 
@@ -398,17 +520,58 @@ export function VoiceAssistantModal({
         }
       }
 
-      // --- EXPLICIT "search for X" / "google X" / "look up X" commands ---
-      if (q.startsWith('search for ') || q.startsWith('search ') || q.startsWith('look up ') || (q.includes('google') && (q.includes('search') || q.includes('for')))) {
-        let search = q
-          .replace(/^(can you |please )?(search|look up)\s+(google\s+)?(for\s+)?/gi, '')
-          .replace(/^(can you |please )?(open\s+)?google\s*(and\s+)?(search\s+)?(for\s+)?/gi, '')
-          .trim();
-        if (search) {
-          safeOpenUrl(`https://www.google.com/search?q=${encodeURIComponent(search)}`);
-          speakVoiceResponse(`Searching Google for ${search}. Results are in a new tab.`);
-          setActionNotice(`✅ Google: ${search}`);
-          return true;
+      // --- INSTANT TIME / DATE / DAY QUERIES (0 tokens, instant response) ---
+      if (q.includes('what time') || q.includes('current time') || q === 'time' || q.includes('whats the time')) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        setActionNotice(`🕐 ${timeStr}`);
+        speakVoiceResponse(`The current time is ${timeStr}.`);
+        return true;
+      }
+      if (q.includes('what date') || q.includes('todays date') || q.includes('current date') || q === 'date') {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        setActionNotice(`📅 ${dateStr}`);
+        speakVoiceResponse(`Today is ${dateStr}.`);
+        return true;
+      }
+      if (q.includes('what day') || q.includes('which day') || q === 'day') {
+        const now = new Date();
+        const dayStr = now.toLocaleDateString('en-US', { weekday: 'long' });
+        setActionNotice(`📅 ${dayStr}`);
+        speakVoiceResponse(`Today is ${dayStr}.`);
+        return true;
+      }
+
+      // --- INSTANT MATH / CALCULATOR (0 tokens, evaluated locally) ---
+      const mathPatterns = [
+        /^(?:what(?:'s| is)\s+)?(\d[\d\s+\-*/().^%]+\d)\s*(?:\?|$)/i,
+        /^(?:calculate|compute|solve|evaluate)\s+(.+)/i,
+        /^(?:what(?:'s| is)\s+)?(\d+)\s*(plus|minus|times|multiplied by|divided by|x|\+|-|\*|\/)\s*(\d+)/i,
+      ];
+
+      for (const pattern of mathPatterns) {
+        const match = q.match(pattern);
+        if (match) {
+          try {
+            let expr = (match[1] || q)
+              .replace(/plus/gi, '+')
+              .replace(/minus/gi, '-')
+              .replace(/times|multiplied by/gi, '*')
+              .replace(/divided by/gi, '/')
+              .replace(/x(?=\s*\d)/gi, '*')
+              .replace(/[^\d+\-*/().\s]/g, '')
+              .trim();
+            if (expr && /^[\d+\-*/().\s]+$/.test(expr)) {
+              const result = Function('"use strict"; return (' + expr + ')')();
+              if (typeof result === 'number' && isFinite(result)) {
+                const formatted = Number.isInteger(result) ? result.toString() : result.toFixed(4).replace(/\.?0+$/, '');
+                setActionNotice(`🔢 ${expr} = ${formatted}`);
+                speakVoiceResponse(`The answer is ${formatted}.`);
+                return true;
+              }
+            }
+          } catch { /* Not a valid math expression, continue */ }
         }
       }
 
@@ -443,6 +606,9 @@ export function VoiceAssistantModal({
         // The response appears in the chat AND is spoken aloud.
         setActionNotice('🧠 AI answering...');
 
+        // Record query in history buffer
+        setVoiceHistory((prev) => [...prev.slice(-6), { role: 'user', content: spokenTranscript }]);
+
         try {
           const aiResponse = await onSendChatMessage(spokenTranscript);
 
@@ -452,6 +618,7 @@ export function VoiceAssistantModal({
             const spokenPart = sentences.slice(0, 3).join('. ').trim();
             const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
 
+            setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: finalSpeech }]);
             setActionNotice('✅ Answered in chat');
             speakVoiceResponse(finalSpeech);
           } else {
@@ -460,15 +627,17 @@ export function VoiceAssistantModal({
           }
         } catch (chatErr) {
           console.error('Chat message error from voice:', chatErr);
-          // Fallback: use the voice-assistant API for a quick spoken answer
+          // Fallback: use the voice-assistant API for a quick spoken answer with history
           try {
             const response = await fetch('/api/voice-assistant', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ transcript: spokenTranscript, hasActiveDocuments }),
+              body: JSON.stringify({ transcript: spokenTranscript, hasActiveDocuments, history: voiceHistory }),
             });
             const data = await response.json();
             const speech = data.spokenResponse || 'Let me look that up for you.';
+
+            setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: speech }]);
 
             if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
               setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
@@ -476,7 +645,7 @@ export function VoiceAssistantModal({
             } else if (data.actionType === 'APP_ACTION') {
               const a = data.appAction;
               if (a === 'upload_document') { onTriggerUpload(); }
-              else if (a === 'new_chat') { onNewChat(); }
+              else if (a === 'new_chat') { setVoiceHistory([]); onNewChat(); }
               else if (a === 'open_history') { onOpenHistory(); }
               else if (a === 'open_auth') { onOpenAuth(); }
               else if (a === 'install_app') { onInstallApp(); }
@@ -543,6 +712,11 @@ export function VoiceAssistantModal({
     rec.onerror = (event: any) => {
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         setRecognitionAvailable(false); setAssistantState('idle');
+      } else if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'network') {
+        // Auto-retry on transient errors instead of going idle
+        if (!isProcessingRef.current && shouldRestartRef.current) {
+          setTimeout(() => { try { rec.start(); } catch {} }, 500);
+        }
       }
     };
 
@@ -569,7 +743,8 @@ export function VoiceAssistantModal({
 
       if (!hasGreetedRef.current) {
         setTimeout(() => {
-          speakVoiceResponse("Hi! I'm Insight Voice. Say any command and I'll handle it.");
+          const u = getUserFirstName();
+          speakVoiceResponse(`Ready ${u}! Say any command and I'll handle it for you.`);
         }, 500);
         hasGreetedRef.current = true;
       }
@@ -675,7 +850,7 @@ export function VoiceAssistantModal({
           <AnimatedVoiceLogo
             size="xl"
             state={assistantState}
-            onClick={toggleListening}
+            onClick={() => { unlockMobileAudio(); toggleListening(); }}
           />
 
           {/* Status */}

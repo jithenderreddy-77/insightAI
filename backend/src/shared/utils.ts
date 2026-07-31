@@ -53,6 +53,13 @@ export async function loadChatModel(
       if (!nvidiaApiKey) {
         throw new Error('NVIDIA_API_KEY is not set in environment variables');
       }
+
+      // DeepSeek models require chat_template_kwargs to disable thinking mode
+      const isDeepSeek = model.toLowerCase().includes('deepseek');
+      const extraBody = isDeepSeek
+        ? { chat_template_kwargs: { thinking: false } }
+        : undefined;
+
       return new ChatOpenAI({
         model: model,
         apiKey: nvidiaApiKey,
@@ -60,6 +67,7 @@ export async function loadChatModel(
         configuration: {
           baseURL: 'https://integrate.api.nvidia.com/v1',
         },
+        ...(extraBody ? { modelKwargs: extraBody } : {}),
       });
     }
 

@@ -1,10 +1,8 @@
-// app/api/chat/route.ts
-// Direct chat — queries Supabase/Vector store and streams AI response (Cloud API GPU + Built-in Standalone Offline RAG Engine)
-
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { performWebSearch } from '@/lib/web-search';
 
 export async function POST(req: Request) {
   try {
@@ -180,6 +178,30 @@ export async function POST(req: Request) {
       '       - Do NOT output stray `classDef` or `style` lines.',
     ].join('\n');
 
+    let liveWebContext = '';
+    if (!context && !useLocalOffline) {
+      const isLiveQuery =
+        queryLower.includes('weather') ||
+        queryLower.includes('news') ||
+        queryLower.includes('stock') ||
+        queryLower.includes('score') ||
+        queryLower.includes('price') ||
+        queryLower.includes('today') ||
+        queryLower.includes('latest') ||
+        queryLower.includes('current') ||
+        queryLower.includes('who is') ||
+        queryLower.includes('what is the price');
+
+      if (isLiveQuery) {
+        try {
+          const webData = await performWebSearch(message);
+          if (webData.summary) {
+            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 1000)}\nUse the real-time web data above if relevant to answer the query accurately.`;
+          }
+        } catch {}
+      }
+    }
+
     const systemPrompt = context
       ? `You are an elite AI Document Intelligence Engine. Your ONLY job is to provide exceptionally accurate answers based STRICTLY on the DOCUMENT CONTEXT provided below.
 
@@ -196,7 +218,7 @@ ${context}`
 Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 - Respond to greetings ("hi", "hello", "good morning", "how are you") warmly and conversationally.
 - Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
-- ${mermaidInstructions}`;
+- ${mermaidInstructions}${liveWebContext}`;
 
     // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
     let aiResponseStream: ReadableStream | null = null;
@@ -240,14 +262,14 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'meta/llama-3.1-8b-instruct',
+            model: process.env.NVIDIA_MODEL || 'deepseek-ai/deepseek-v4-pro',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: message },
             ],
             stream: true,
             temperature: 0.1,
-            max_tokens: 4096,
+            max_tokens: parseInt(process.env.NVIDIA_MAX_COMPLETION_TOKENS || '16384', 10),
           }),
         });
 
