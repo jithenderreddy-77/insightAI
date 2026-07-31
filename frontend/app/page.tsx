@@ -841,17 +841,14 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Glowing Neon Siri/Alexa Voice Assistant Trigger */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2 rounded-xl border-cyan-400/50 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/30 hover:to-indigo-500/30 text-cyan-700 dark:text-cyan-300 font-extrabold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all duration-300 hover:scale-105"
+              {/* Glowing Icon-Only Siri/Alexa Voice Assistant Trigger */}
+              <button
+                className="p-1.5 px-2 rounded-2xl border border-cyan-400/60 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/35 hover:to-indigo-500/35 shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
                 onClick={() => setIsVoiceModalOpen(true)}
                 title="Activate Insight Voice Siri/Alexa Assistant"
               >
                 <AnimatedVoiceLogo size="sm" />
-                <span>Insight Voice</span>
-              </Button>
+              </button>
 
               {/* PWA Install App Button */}
               {isInstallable && (

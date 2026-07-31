@@ -579,6 +579,83 @@ export function VoiceAssistantModal({
         files: { web: 'https://drive.google.com', native: 'shareddocuments://', aliases: ['file manager', 'my files'] },
       };
 
+      // --- APP SEARCH DEEP LINK AUTOMATION (e.g., "open flipkart and search for sneakers", "search for shoes on amazon") ---
+      const appSearchPattern = /^(?:open|launch|go to)\s+([a-z0-9\s]+?)\s+(?:and\s+)?(?:search\s+(?:for\s+)?|find\s+|look\s+for\s+)(.+)/i;
+      const searchInAppPattern = /^(?:search\s+(?:for\s+)?|find\s+|look\s+for\s+)(.+?)\s+(?:on|in|using)\s+([a-z0-9\s]+)/i;
+
+      const appSearchMatch = q.match(appSearchPattern) || q.match(searchInAppPattern);
+
+      if (appSearchMatch) {
+        let appName = '';
+        let searchQuery = '';
+
+        if (q.match(appSearchPattern)) {
+          appName = appSearchMatch[1].trim().toLowerCase();
+          searchQuery = appSearchMatch[2].trim();
+        } else {
+          searchQuery = appSearchMatch[1].trim();
+          appName = appSearchMatch[2].trim().toLowerCase();
+        }
+
+        // Search URL mapping for major e-commerce, media, & productivity apps
+        const appSearchUrls: Record<string, { web: string; native: string }> = {
+          flipkart: {
+            web: `https://www.flipkart.com/search?q=${encodeURIComponent(searchQuery)}`,
+            native: `flipkart://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          amazon: {
+            web: `https://www.amazon.in/s?k=${encodeURIComponent(searchQuery)}`,
+            native: `amazon://search?k=${encodeURIComponent(searchQuery)}`,
+          },
+          youtube: {
+            web: `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`,
+            native: `vnd.youtube://results?search_query=${encodeURIComponent(searchQuery)}`,
+          },
+          myntra: {
+            web: `https://www.myntra.com/${encodeURIComponent(searchQuery)}`,
+            native: `myntra://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          swiggy: {
+            web: `https://www.swiggy.com/search?query=${encodeURIComponent(searchQuery)}`,
+            native: `swiggy://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          zomato: {
+            web: `https://www.zomato.com/search?q=${encodeURIComponent(searchQuery)}`,
+            native: `zomato://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          spotify: {
+            web: `https://open.spotify.com/search/${encodeURIComponent(searchQuery)}`,
+            native: `spotify://search/${encodeURIComponent(searchQuery)}`,
+          },
+          google: {
+            web: `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`,
+            native: `google://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          pinterest: {
+            web: `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(searchQuery)}`,
+            native: `pinterest://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          github: {
+            web: `https://github.com/search?q=${encodeURIComponent(searchQuery)}`,
+            native: `github://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+          reddit: {
+            web: `https://www.reddit.com/search/?q=${encodeURIComponent(searchQuery)}`,
+            native: `reddit://search?q=${encodeURIComponent(searchQuery)}`,
+          },
+        };
+
+        for (const [key, target] of Object.entries(appSearchUrls)) {
+          if (appName === key || appName.includes(key) || key.includes(appName)) {
+            const formattedName = key.charAt(0).toUpperCase() + key.slice(1);
+            setActionNotice(`✅ ${formattedName}: "${searchQuery}"`);
+            safeOpenUrl(target.web, target.native);
+            speakVoiceResponse(`Opening ${formattedName} and searching for ${searchQuery}, ${userName}. Any other command?`);
+            return true;
+          }
+        }
+      }
+
       // --- FLEXIBLE APP NAME MATCHING (handles "open youtube for me", "can you launch spotify", etc.) ---
       const openVerbs = /^(can you |please |could you |would you )?(open|launch|start|go to|open up|run|show|switch to|take me to|bring up)\s+/i;
       const cleanedForAppMatch = q.replace(openVerbs, '').replace(/\s+(app|application|for me|please|now)$/gi, '').trim();
