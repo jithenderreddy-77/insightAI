@@ -14,6 +14,7 @@ interface VoiceAssistantModalProps {
   onOpenAuth: () => void;
   onInstallApp: () => void;
   onAskDocumentQuestion: (question: string) => void;
+  onSendChatMessage: (message: string) => Promise<string>;
 }
 
 type AssistantState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'waiting';
@@ -28,6 +29,7 @@ export function VoiceAssistantModal({
   onOpenAuth,
   onInstallApp,
   onAskDocumentQuestion,
+  onSendChatMessage,
 }: VoiceAssistantModalProps) {
   const [assistantState, setAssistantState] = useState<AssistantState>('idle');
   const [transcript, setTranscript] = useState('');
@@ -396,35 +398,23 @@ export function VoiceAssistantModal({
         }
       }
 
-      // --- SMART QUESTION/DOUBT DETECTION ---
-      // If the user is asking a question, doubt, or wants information:
-      // → Open Google search results in a new tab
-      // → Speak a helpful summary response
-      const questionPatterns = [
-        /^(what|who|where|when|why|how|which|whose|whom)\b/i,
-        /^(tell me|explain|describe|define|can you tell|do you know|i want to know)\b/i,
-        /^(is|are|was|were|will|would|could|should|does|did|has|have|can)\s+/i,
-        /\?$/,  // ends with question mark
-        /^(meaning of|definition of|difference between)\b/i,
-      ];
-      const isQuestion = questionPatterns.some(p => p.test(q));
-
-      if (isQuestion) {
-        const searchQuery = q.replace(/[?]/g, '').trim();
-        const encoded = encodeURIComponent(searchQuery);
-        setActionNotice(`✅ Searching: "${searchQuery.slice(0, 30)}"`);
-        safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
-        speakVoiceResponse(`Great question! I'm searching for ${searchQuery}. I've opened the search results in a new tab where you can find detailed answers.`);
-        return true;
+      // --- EXPLICIT "search for X" / "google X" / "look up X" commands ---
+      if (q.startsWith('search for ') || q.startsWith('search ') || q.startsWith('look up ') || (q.includes('google') && (q.includes('search') || q.includes('for')))) {
+        let search = q
+          .replace(/^(can you |please )?(search|look up)\s+(google\s+)?(for\s+)?/gi, '')
+          .replace(/^(can you |please )?(open\s+)?google\s*(and\s+)?(search\s+)?(for\s+)?/gi, '')
+          .trim();
+        if (search) {
+          safeOpenUrl(`https://www.google.com/search?q=${encodeURIComponent(search)}`);
+          speakVoiceResponse(`Searching Google for ${search}. Results are in a new tab.`);
+          setActionNotice(`✅ Google: ${search}`);
+          return true;
+        }
       }
 
-      // --- UNIVERSAL FALLBACK: If nothing matched above, treat as general search ---
-      // This ensures the assistant ALWAYS does something useful
-      const encoded = encodeURIComponent(q);
-      setActionNotice(`✅ Searching: "${q.slice(0, 25)}"`);
-      safeOpenUrl(`https://www.google.com/search?q=${encoded}`);
-      speakVoiceResponse(`I searched Google for ${q}. Check the new tab for the results.`);
-      return true;
+      // --- DO NOT CATCH questions/doubts/theory here ---
+      // Let them fall through to the AI API for intelligent answers
+      return false;
     },
     [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose]
   );
@@ -443,47 +433,68 @@ export function VoiceAssistantModal({
       try { recognitionRef.current?.stop(); } catch {}
 
       try {
-        // Fast-path check (0ms latency, 0 API Tokens consumed!)
+        // Fast-path check (0ms latency, 0 API Tokens consumed!) — only handles automation/app/search commands
         const handled = matchClientInstantAction(spokenTranscript);
         if (handled) return;
 
-        // AI Intent Parser for complex / unrecognized queries
-        const response = await fetch('/api/voice-assistant', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: spokenTranscript, hasActiveDocuments }),
-        });
-        const data = await response.json();
-        const speech = data.spokenResponse || 'Done.';
+        // --- CONVERSATIONAL AI ENGINE ---
+        // All non-automation queries (questions, doubts, conversations) are sent
+        // directly to the chatbot for an intelligent answer.
+        // The response appears in the chat AND is spoken aloud.
+        setActionNotice('🧠 AI answering...');
 
-        if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
-          setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
-          safeOpenUrl(data.targetUrl);
-          speakVoiceResponse(speech);
-        } else if (data.actionType === 'APP_ACTION') {
-          const a = data.appAction;
-          if (a === 'upload_document') { onTriggerUpload(); }
-          else if (a === 'new_chat') { onNewChat(); }
-          else if (a === 'open_history') { onOpenHistory(); }
-          else if (a === 'open_auth') { onOpenAuth(); }
-          else if (a === 'install_app') { onInstallApp(); }
-          setActionNotice(`✅ ${a || 'done'}`);
-          speakVoiceResponse(speech);
-        } else if (data.actionType === 'DOCUMENT_QA' && data.query) {
-          setActionNotice(`✅ Querying document...`);
-          onAskDocumentQuestion(data.query);
-          speakVoiceResponse(speech);
-        } else {
-          speakVoiceResponse(speech);
+        try {
+          const aiResponse = await onSendChatMessage(spokenTranscript);
+
+          if (aiResponse && aiResponse.length > 0) {
+            // Trim the spoken response to ~3 sentences for TTS (keep it natural)
+            const sentences = aiResponse.replace(/[#*`>\-|]/g, '').split(/[.!?]+/).filter(s => s.trim().length > 5);
+            const spokenPart = sentences.slice(0, 3).join('. ').trim();
+            const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
+
+            setActionNotice('✅ Answered in chat');
+            speakVoiceResponse(finalSpeech);
+          } else {
+            setActionNotice('✅ Answered');
+            speakVoiceResponse('I\'ve answered in the chat. You can see the full response there.');
+          }
+        } catch (chatErr) {
+          console.error('Chat message error from voice:', chatErr);
+          // Fallback: use the voice-assistant API for a quick spoken answer
+          try {
+            const response = await fetch('/api/voice-assistant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transcript: spokenTranscript, hasActiveDocuments }),
+            });
+            const data = await response.json();
+            const speech = data.spokenResponse || 'Let me look that up for you.';
+
+            if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
+              setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
+              safeOpenUrl(data.targetUrl);
+            } else if (data.actionType === 'APP_ACTION') {
+              const a = data.appAction;
+              if (a === 'upload_document') { onTriggerUpload(); }
+              else if (a === 'new_chat') { onNewChat(); }
+              else if (a === 'open_history') { onOpenHistory(); }
+              else if (a === 'open_auth') { onOpenAuth(); }
+              else if (a === 'install_app') { onInstallApp(); }
+            }
+            setActionNotice(`✅ Answered`);
+            speakVoiceResponse(speech);
+          } catch {
+            speakVoiceResponse('Sorry, I couldn\'t process that. Please try again.');
+          }
         }
       } catch (err) {
         console.error('Voice command error:', err);
-        speakVoiceResponse('Sorry, there was an issue. Try again.');
+        speakVoiceResponse('Sorry, there was an issue. Please try again.');
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion]
+    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
   );
 
   // --- SPEECH RECOGNITION INIT ---

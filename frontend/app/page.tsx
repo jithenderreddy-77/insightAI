@@ -275,6 +275,114 @@ export default function Home() {
     });
   };
 
+  // --- VOICE ASSISTANT → CHATBOT BRIDGE ---
+  // Programmatically sends a voice question to the chat API, streams the response,
+  // shows it in the chat UI, and returns the full AI response text for TTS.
+  const handleVoiceChatMessage = async (voiceMessage: string): Promise<string> => {
+    if (!voiceMessage.trim()) return '';
+
+    // Ensure we have a thread
+    let currentThreadId = threadId;
+    if (!currentThreadId) {
+      const newId = `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setThreadId(newId);
+      currentThreadId = newId;
+    }
+
+    // Add user message and placeholder assistant message to chat UI
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: voiceMessage, sources: undefined },
+      { role: 'assistant', content: '', sources: undefined },
+    ]);
+
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: voiceMessage,
+        threadId: currentThreadId,
+        fileNames: files.map((f) => f.name),
+        useLocalOffline: isOffline,
+        offlineDocuments: offlineDocs,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Chat API error: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No reader available');
+
+    const decoder = new TextDecoder();
+    let done = false;
+    let sseBuffer = '';
+    let fullResponseText = '';
+
+    while (!done) {
+      const { done: chunkDone, value } = await reader.read();
+      done = chunkDone;
+
+      if (value) {
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+
+          const sseString = trimmed.slice('data: '.length);
+          let sseEvent: any;
+          try {
+            sseEvent = JSON.parse(sseString);
+          } catch {
+            continue;
+          }
+
+          const { event, data } = sseEvent;
+
+          if (event === 'messages/partial') {
+            if (Array.isArray(data)) {
+              const lastObj = data[data.length - 1];
+              if (lastObj?.type === 'ai') {
+                const partialContent = lastObj.content ?? '';
+                if (typeof partialContent === 'string' && !partialContent.startsWith('{')) {
+                  fullResponseText = partialContent;
+                  setMessages((prev) => {
+                    const newArr = [...prev];
+                    if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+                      newArr[newArr.length - 1].content = partialContent;
+                    }
+                    return newArr;
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Save the thread
+    if (user && currentThreadId) {
+      saveUserThread(user.id, {
+        id: currentThreadId,
+        title: voiceMessage.slice(0, 40) + (voiceMessage.length > 40 ? '...' : ''),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messageCount: 2,
+        fileNames: files.map((f) => f.name),
+      });
+      loadThreadsForUser(user.id);
+    }
+
+    return fullResponseText;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !threadId || isLoading) return;
@@ -641,6 +749,7 @@ export default function Home() {
             if (form) form.requestSubmit();
           }, 200);
         }}
+        onSendChatMessage={handleVoiceChatMessage}
       />
 
       {/* History Sidebar Component */}
