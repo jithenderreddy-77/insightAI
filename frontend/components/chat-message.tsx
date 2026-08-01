@@ -30,45 +30,43 @@ interface ChatMessageProps {
  * but missing the mermaid language tag.
  */
 function preprocessMermaidContent(content: string): string {
+  if (!content) return '';
+  let processed = content;
+
   // Mermaid diagram header keywords
   const mermaidHeaders = [
-    'graph', 'flowchart',
-    'sequenceDiagram', 'classDiagram', 'stateDiagram',
-    'erDiagram', 'journey', 'gantt', 'pie', 'gitgraph',
-    'mindmap', 'timeline',
-    'requirementDiagram', 'quadrantChart',
-    'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
-    'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
+    'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
+    'erDiagram', 'journey', 'gantt', 'pie', 'gitgraph', 'mindmap', 'timeline',
+    'requirementDiagram', 'quadrantChart', 'architecture-beta', 'block-beta',
+    'xychart-beta', 'sankey-beta', 'C4Context', 'C4Container', 'C4Component',
+    'C4Dynamic', 'C4Deployment',
   ];
 
   // 1. Fix generic code fences (``` without mermaid tag) that contain mermaid content
-  let processed = content.replace(
-    /```\s*\n([\s\S]*?)```/g,
-    (match, codeBlock: string) => {
-      const trimmedBlock = codeBlock.trim();
-      const isMermaid = mermaidHeaders.some((h) => trimmedBlock.startsWith(h)) ||
-        (trimmedBlock.includes('subgraph') && (trimmedBlock.includes('-->') || trimmedBlock.includes('---')));
-      if (isMermaid) {
-        return '```mermaid\n' + codeBlock + '```';
-      }
-      return match;
+  processed = processed.replace(/```\s*\n([\s\S]*?)```/g, (match, codeBlock: string) => {
+    const trimmedBlock = codeBlock.trim();
+    const isMermaid = mermaidHeaders.some((h) => trimmedBlock.toLowerCase().startsWith(h.toLowerCase())) ||
+      (trimmedBlock.includes('subgraph') && (trimmedBlock.includes('-->') || trimmedBlock.includes('---')));
+    if (isMermaid) {
+      return '```mermaid\n' + codeBlock.trim() + '\n```';
     }
-  );
+    return match;
+  });
 
-  // 2. Detect bare (unfenced) mermaid blocks in the text
-  // Look for lines starting with mermaid headers followed by node/edge lines
+  // 2. Wrap unfenced mermaid blocks (e.g. lines starting with graph TD / flowchart LR)
   for (const header of mermaidHeaders) {
     const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const bareBlockRegex = new RegExp(
-      `(?:^|\\n)(${escapedHeader}\\s*\\n(?:[ \\t]+[^\\n]+\\n?)+)`,
-      'g'
+      `(?:^|\\n)(${escapedHeader}(?:\\s+[A-Za-z0-9_-]+)?\\s*\\n(?:[^\\n]+\\n?)+?)(?=\\n\\s*\\n|\\n[A-Z#*]|$|\`\`\`)`,
+      'gi'
     );
+
     processed = processed.replace(bareBlockRegex, (match, block: string) => {
-      // Don't wrap if it's already inside a code fence
-      const beforeMatch = processed.substring(0, processed.indexOf(match));
-      const openFences = (beforeMatch.match(/```/g) || []).length;
-      if (openFences % 2 === 1) return match; // inside a code fence already
-      return '\n```mermaid\n' + block.trim() + '\n```\n';
+      const trimmed = block.trim();
+      if (trimmed.includes('-->') || trimmed.includes('---') || trimmed.includes('subgraph') || trimmed.includes('[')) {
+        return '\n```mermaid\n' + trimmed + '\n```\n';
+      }
+      return match;
     });
   }
 

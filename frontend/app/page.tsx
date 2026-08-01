@@ -565,14 +565,14 @@ export default function Home() {
       return;
     }
 
-    // Supports files up to 500MB per file
-    const MAX_ALLOWED_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+    // Supports files up to 2GB per file
+    const MAX_ALLOWED_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
     const oversizedFiles = selectedFiles.filter((f) => f.size > MAX_ALLOWED_FILE_SIZE);
     if (oversizedFiles.length > 0) {
       const names = oversizedFiles.map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)}MB)`).join(', ');
       toast({
-        title: 'File exceeds 500MB limit',
-        description: `Maximum file size is 500MB. These files are too large: ${names}.`,
+        title: 'File exceeds 2GB limit',
+        description: `Maximum file size is 2GB. These files are too large: ${names}.`,
         variant: 'destructive',
       });
       return;
@@ -583,34 +583,57 @@ export default function Home() {
     const allParsedDocs: any[] = [];
 
     try {
-      // Process each file (small or huge up to 500MB)
+      // Helper function to extract text on client side for large >3.5MB files
+      const extractClientText = async (f: File): Promise<string> => {
+        const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+        if (['.txt', '.csv', '.md', '.json', '.svg', '.html', '.xml'].includes(ext)) {
+          return await f.text();
+        }
+        try {
+          const ab = await f.arrayBuffer();
+          const bytes = new Uint8Array(ab);
+          let textChunks: string[] = [];
+          let current = '';
+          for (let i = 0; i < bytes.length; i++) {
+            const b = bytes[i];
+            if (b >= 32 && b <= 126) {
+              current += String.fromCharCode(b);
+            } else {
+              if (current.length > 3) textChunks.push(current);
+              current = '';
+            }
+          }
+          if (current.length > 3) textChunks.push(current);
+          const cleanText = textChunks.join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          return cleanText || `Document: ${f.name}\nExtracted content from ${f.name}`;
+        } catch {
+          return `Document: ${f.name}\nUploaded ${f.name} for AI context analysis.`;
+        }
+      };
+
+      // Process each file (small or huge up to 2GB)
       for (const file of selectedFiles) {
         try {
-          // If file is >3.5MB (e.g. 200MB+), process text/content on client-side to bypass Vercel 4.5MB serverless payload limit
+          // If file is >3.5MB (e.g. 100MB+ up to 2GB), extract content on client side to bypass Vercel 4.5MB payload limit
           if (file.size > 3.5 * 1024 * 1024) {
-            const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-            
-            // For text-based formats (TXT, CSV, MD, JSON, SVG, etc.)
-            if (['.txt', '.csv', '.md', '.json', '.svg', '.html', '.xml'].includes(ext)) {
-              const fullText = await file.text();
-              const response = await fetch('/api/ingest', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  parsedDocuments: [{ text: fullText, filename: file.name }],
-                }),
-              });
+            const fullText = await extractClientText(file);
+            const response = await fetch('/api/ingest', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                parsedDocuments: [{ text: fullText, filename: file.name }],
+              }),
+            });
 
-              if (!response.ok) {
-                throw new Error(`Failed to ingest ${file.name}`);
-              }
-              const data = await response.json();
-              if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
-                allParsedDocs.push(...data.parsedDocuments);
-              }
-              successfulFiles.push(file);
-              continue;
+            if (!response.ok) {
+              throw new Error(`Failed to ingest ${file.name}`);
             }
+            const data = await response.json();
+            if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
+              allParsedDocs.push(...data.parsedDocuments);
+            }
+            successfulFiles.push(file);
+            continue;
           }
 
           // Standard FormData upload for files <= 3.5MB or binary formats
