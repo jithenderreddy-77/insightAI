@@ -24,18 +24,20 @@ export async function POST(req: Request) {
       .split(/\s+/)
       .filter((w: string) => w.length > 2);
 
-    // --- PARALLEL EXECUTION: Embedding + Supabase filename retrieval start simultaneously ---
+    // --- FAST EXECUTION: Query Embedding (400ms hard timeout) + Parallel Supabase / Offline retrieval ---
     const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
 
-    // Start Supabase filename retrieval in parallel (no embedding needed)
     let filenameDocs: any[] = [];
     const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
-    const supabaseFilePromise = (hasFiles && supabaseUrl && supabaseKey && !useLocalOffline)
+    const hasOfflineDocs = offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0;
+
+    // If offlineDocuments are present in session, skip slow Supabase network call entirely!
+    const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline)
       ? (async () => {
           try {
             const client = createClient(supabaseUrl, supabaseKey);
             const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
-            // Don't download embedding column — massive speedup
+            // Fast select without heavy embedding column
             const { data, error } = await client.from('documents').select('id, content, metadata');
             if (!error && data && data.length > 0) {
               filenameDocs = data.filter((d: any) => {
@@ -47,13 +49,13 @@ export async function POST(req: Request) {
         })()
       : Promise.resolve();
 
-    // Wait for both embedding + filename retrieval to complete in parallel
+    // Wait for embedding (max 400ms) + filename retrieval
     const [queryEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
 
     let allCandidateDocs: any[] = [...filenameDocs];
 
-    // If no filename matches found, use vector similarity search
-    if (allCandidateDocs.length === 0 && supabaseUrl && supabaseKey && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
+    // If no cloud filename matches found and no offline docs, try Supabase vector search with 500ms timeout
+    if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
       try {
         const client = createClient(supabaseUrl, supabaseKey);
         const { data: rawDocs, error: matchError } = await client.rpc('match_documents', {
@@ -671,7 +673,7 @@ async function getQueryEmbedding(
     return [];
   })();
 
-  // Hard 800ms timeout — skip embedding entirely if slow, rely on keyword search
-  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 800));
+  // Hard 400ms timeout — skip embedding entirely if slow, rely on BM25 keyword search
+  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 400));
   return Promise.race([fetchEmbeddingPromise, timeoutPromise]);
 }

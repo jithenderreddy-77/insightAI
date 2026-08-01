@@ -60,7 +60,8 @@ function sanitizeMermaidCode(raw: string): string {
     'xychart-beta', 'sankey-beta', 'C4Context', 'C4Container', 'C4Component',
     'C4Dynamic', 'C4Deployment',
   ];
-  const firstLine = clean.split('\n')[0].trim();
+  const linesArray = clean.split('\n').map((line) => line.trim()).filter(Boolean);
+  const firstLine = linesArray[0] || '';
   const hasValidHeader = mermaidHeaders.some((h) => firstLine.toLowerCase().startsWith(h.toLowerCase()));
   if (!hasValidHeader) {
     clean = `graph TD\n${clean}`;
@@ -68,17 +69,13 @@ function sanitizeMermaidCode(raw: string): string {
 
   let sgCounter = 1;
   let openSubgraphs = 0;
-  const definedNodes = new Set<string>();
 
-  const lines = clean.split('\n').map((line) => {
+  const sanitizedLines = clean.split('\n').map((line) => {
     let l = line.trim();
     if (!l) return '';
 
-    // Strip trailing semicolons
-    l = l.replace(/;+\s*$/g, '');
-
-    // Remove ampersands globally (Mermaid parser chokes on &)
-    l = l.replace(/&/g, 'and');
+    // Strip trailing semicolons & remove ampersands
+    l = l.replace(/;+\s*$/g, '').replace(/&/g, 'and');
 
     // FIX: `-- text -->` pattern → `-->|"text"|`
     l = l.replace(/--\s+"?([^">\n]+?)"?\s+-->/g, (m, label) => {
@@ -94,7 +91,6 @@ function sanitizeMermaidCode(raw: string): string {
         .trim();
       return `-->|"${cleanLabel}"| `;
     });
-    // Remove any remaining stray `|>` or `| >` before node names
     l = l.replace(/\|\s*>\s*/g, '| ');
 
     // FIX SUBGRAPH HEADER BUG
@@ -119,38 +115,34 @@ function sanitizeMermaidCode(raw: string): string {
     l = l.replace(/\s*->>>\s*/g, ' --> ');
     l = l.replace(/\s*--->\s*/g, ' --> ');
 
+    // REMOVE SELF-LOOPS (e.g. A --> A or A["Text"] -->|"..."| A)
+    const selfLoopMatch = l.match(/^([A-Za-z0-9_]+)(?:\[.*?\]|\(.*?\))?\s*-->.*?\s+\1$/);
+    if (selfLoopMatch) {
+      return ''; // Drop self-loop line
+    }
+
     // Fix node labels with parentheses — `A(Label)` → `A["Label"]`
     l = l.replace(/([A-Za-z0-9_]+)\(([^)"\n]+)\)/g, (m, id, label) => {
       const cleanLabel = label.replace(/"/g, "'").trim();
-      if (definedNodes.has(id)) return id;
-      definedNodes.add(id);
       return `${id}["${cleanLabel}"]`;
     });
 
-    // Fix node IDs with spaces
+    // UNCONDITIONALLY wrap unquoted node labels in brackets with quotes — `ID[Label Text]` → `ID["Label Text"]`
+    l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}["${cleanLabel}"]`;
+    });
+
+    // UNCONDITIONALLY wrap unquoted decision node labels with quotes — `ID{Label Text}` → `ID{"Label Text"}`
+    l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      return `${id}{"${cleanLabel}"}`;
+    });
+
+    // Fix node IDs with spaces in node definitions
     l = l.replace(/^([A-Za-z0-9_\s]+)\["([^"]+)"\]/g, (m, id, label) => {
       const cleanId = id.trim().replace(/\s+/g, '_');
       return `${cleanId}["${label}"]`;
-    });
-
-    // Fix unquoted node labels in brackets
-    l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
-      if (definedNodes.has(id)) {
-        return id;
-      }
-      definedNodes.add(id);
-      return `${id}["${cleanLabel}"]`;
-    });
-
-    // Fix decision node labels
-    l = l.replace(/([A-Za-z0-9_]+)\{([^}"\n]+)\}/g, (m, id, label) => {
-      const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
-      if (definedNodes.has(id)) {
-        return id;
-      }
-      definedNodes.add(id);
-      return `${id}{"${cleanLabel}"}`;
     });
 
     // Remove style/classDef/linkStyle directives entirely (major source of parse errors)
@@ -163,11 +155,11 @@ function sanitizeMermaidCode(raw: string): string {
 
   // Balance missing `end` statements for subgraphs
   while (openSubgraphs > 0) {
-    lines.push('end');
+    sanitizedLines.push('end');
     openSubgraphs--;
   }
 
-  return lines.filter(Boolean).join('\n');
+  return sanitizedLines.filter(Boolean).join('\n');
 }
 
 /**
