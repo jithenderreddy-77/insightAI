@@ -570,15 +570,15 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
 
   // 3. Advanced Document-Specific Interactive Mermaid Flowchart
   if (wantsFlowchart) {
-    const cleanSource = primarySource.replace(/[^a-zA-Z0-9._\s-]/g, '');
+    const cleanSource = primarySource.replace(/[^a-zA-Z0-9._\s-]/g, '').trim() || 'Uploaded Document';
     const topicList = extractedSentences
-      .map((s) => s.split(':')[0].trim().slice(0, 32).replace(/[^a-zA-Z0-9\s]/g, ''))
+      .map((s) => s.split(':')[0].trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 30))
       .filter((t) => t.length > 3);
 
-    const step1 = topicList[0] || 'Document Text Extraction';
-    const step2 = topicList[1] || 'Semantic Fact Analysis';
-    const step3 = topicList[2] || 'Data Verification Pipeline';
-    const step4 = topicList[3] || 'Synthesized Document Insights';
+    const step1 = (topicList[0] || 'Document Text Extraction').replace(/["\\]/g, '');
+    const step2 = (topicList[1] || 'Semantic Fact Analysis').replace(/["\\]/g, '');
+    const step3 = (topicList[2] || 'Data Verification Pipeline').replace(/["\\]/g, '');
+    const step4 = (topicList[3] || 'Synthesized Document Insights').replace(/["\\]/g, '');
 
     output += `### Document Workflow Diagram\n\n`;
     output += `\`\`\`mermaid\ngraph TD\n`;
