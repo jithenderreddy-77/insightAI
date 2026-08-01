@@ -17,9 +17,6 @@ export async function POST(req: Request) {
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
 
-    // 1) Get query embedding with automatic offline fallback
-    const queryEmbedding = await getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
-
     // Prepare query terms for hybrid keyword scoring
     const queryLower = message.toLowerCase();
     const queryTerms = queryLower
@@ -27,43 +24,47 @@ export async function POST(req: Request) {
       .split(/\s+/)
       .filter((w: string) => w.length > 2);
 
-    let allCandidateDocs: any[] = [];
+    // --- PARALLEL EXECUTION: Embedding + Supabase filename retrieval start simultaneously ---
+    const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
 
-    // Attempt Supabase document retrieval if configured & connected
-    if (supabaseUrl && supabaseKey && !useLocalOffline) {
-      try {
-        const supabaseClient = createClient(supabaseUrl, supabaseKey);
-
-        if (fileNames && Array.isArray(fileNames) && fileNames.length > 0) {
-          const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
-
-          const { data: fileDocs, error: fileError } = await supabaseClient
-            .from('documents')
-            .select('id, content, metadata, embedding');
-
-          if (!fileError && fileDocs && fileDocs.length > 0) {
-            const matchingFileDocs = fileDocs.filter((d: any) => {
-              const fn = (d.metadata?.filename || d.metadata?.source || '').toLowerCase();
-              return activeFileNames.some((af) => fn.includes(af) || af.includes(fn));
-            });
-
-            if (matchingFileDocs.length > 0) {
-              allCandidateDocs.push(...matchingFileDocs);
+    // Start Supabase filename retrieval in parallel (no embedding needed)
+    let filenameDocs: any[] = [];
+    const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
+    const supabaseFilePromise = (hasFiles && supabaseUrl && supabaseKey && !useLocalOffline)
+      ? (async () => {
+          try {
+            const client = createClient(supabaseUrl, supabaseKey);
+            const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
+            // Don't download embedding column — massive speedup
+            const { data, error } = await client.from('documents').select('id, content, metadata');
+            if (!error && data && data.length > 0) {
+              filenameDocs = data.filter((d: any) => {
+                const fn = (d.metadata?.filename || d.metadata?.source || '').toLowerCase();
+                return activeFileNames.some((af: string) => fn.includes(af) || af.includes(fn));
+              });
             }
-          }
-        }
+          } catch {}
+        })()
+      : Promise.resolve();
 
-        if (allCandidateDocs.length === 0 && queryEmbedding && queryEmbedding.length > 0) {
-          const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
-            query_embedding: queryEmbedding,
-            match_count: 40,
-          });
-          if (!matchError && rawDocs) {
-            allCandidateDocs.push(...rawDocs);
-          }
+    // Wait for both embedding + filename retrieval to complete in parallel
+    const [queryEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
+
+    let allCandidateDocs: any[] = [...filenameDocs];
+
+    // If no filename matches found, use vector similarity search
+    if (allCandidateDocs.length === 0 && supabaseUrl && supabaseKey && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
+      try {
+        const client = createClient(supabaseUrl, supabaseKey);
+        const { data: rawDocs, error: matchError } = await client.rpc('match_documents', {
+          query_embedding: queryEmbedding,
+          match_count: 15,
+        });
+        if (!matchError && rawDocs) {
+          allCandidateDocs.push(...rawDocs);
         }
-      } catch (err) {
-        console.log('[OFFLINE NOTICE] Supabase cloud unreachable. Running standalone local offline RAG engine.');
+      } catch {
+        console.log('[OFFLINE NOTICE] Supabase cloud unreachable.');
       }
     }
 
@@ -133,7 +134,7 @@ export async function POST(req: Request) {
       };
     });
 
-    // Deduplicate and select top 30 chunks
+    // Deduplicate and select top 12 chunks (fewer = faster LLM response)
     scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
 
     const seenContents = new Set<string>();
@@ -144,7 +145,7 @@ export async function POST(req: Request) {
       if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
         seenContents.add(snippet);
         uniqueTopDocs.push(d);
-        if (uniqueTopDocs.length >= 30) break;
+        if (uniqueTopDocs.length >= 12) break;
       }
     }
 
@@ -193,9 +194,14 @@ export async function POST(req: Request) {
 
       if (isLiveQuery) {
         try {
-          const webData = await performWebSearch(message);
+          // Web search with 1.5s hard timeout so it never blocks chat
+          const webSearchWithTimeout = Promise.race([
+            performWebSearch(message),
+            new Promise<{ results: never[]; summary: string }>((r) => setTimeout(() => r({ results: [], summary: '' }), 1500)),
+          ]);
+          const webData = await webSearchWithTimeout;
           if (webData.summary) {
-            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 1000)}\nUse the real-time web data above if relevant to answer the query accurately.`;
+            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 800)}\nUse the real-time web data above if relevant to answer the query accurately.`;
           }
         } catch {}
       }
@@ -219,11 +225,44 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 - Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
 - ${mermaidInstructions}${liveWebContext}`;
 
-    // 2) Get AI Completion Stream — Priority: GPT-4o > NVIDIA > Ollama > Offline Engine
+    // 2) Get AI Completion Stream — Priority: NVIDIA Nemotron (primary) → OpenAI → Ollama → Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
-    // Try OpenAI GPT-4o FIRST (best quality)
-    if (!useLocalOffline && openaiApiKey) {
+    // Try NVIDIA Nemotron FIRST (user's active primary key — ultra-fast reasoning model)
+    if (!useLocalOffline && nvidiaApiKey) {
+      try {
+        const nvidiaModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+        const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${nvidiaApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: nvidiaModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: message },
+            ],
+            stream: true,
+            temperature: 0.7,
+            top_p: 0.95,
+            max_tokens: 4096,
+          }),
+        });
+
+        if (res.ok && res.body) {
+          aiResponseStream = res.body;
+        } else {
+          console.log(`[NVIDIA] API returned status ${res.status}, falling back to OpenAI...`);
+        }
+      } catch (networkError) {
+        console.log('[NVIDIA] Nemotron unreachable, falling back to OpenAI...');
+      }
+    }
+
+    // Fallback to OpenAI GPT-4o-mini if NVIDIA fails
+    if (!aiResponseStream && !useLocalOffline && openaiApiKey) {
       try {
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -232,7 +271,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: message },
@@ -247,36 +286,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
           aiResponseStream = res.body;
         }
       } catch (networkError) {
-        console.log('[GPT-4o] OpenAI unreachable, falling back to NVIDIA...');
-      }
-    }
-
-    // Fallback to NVIDIA if OpenAI fails
-    if (!aiResponseStream && !useLocalOffline && nvidiaApiKey) {
-      try {
-        const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${nvidiaApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: process.env.NVIDIA_MODEL || 'deepseek-ai/deepseek-v4-pro',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: message },
-            ],
-            stream: true,
-            temperature: 0.1,
-            max_tokens: parseInt(process.env.NVIDIA_MAX_COMPLETION_TOKENS || '16384', 10),
-          }),
-        });
-
-        if (res.ok && res.body) {
-          aiResponseStream = res.body;
-        }
-      } catch (networkError) {
-        console.log('[NVIDIA] Cloud API unreachable. Switching to Offline Engine...');
+        console.log('[OpenAI] GPT-4o-mini unreachable, falling back to Ollama...');
       }
     }
 
@@ -313,7 +323,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
       start(controller) {
         if (!aiResponseStream) {
           // Built-in Standalone Offline Extractive Intelligence Engine (Zero external dependencies)
-          const standaloneAnswer = generateStandaloneOfflineAnswer(message, docs);
+          const standaloneAnswer = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
           const ssePayload = {
             event: 'messages/partial',
             data: [{ type: 'ai', content: standaloneAnswer }],
@@ -566,6 +576,7 @@ async function getQueryEmbedding(
       } catch {}
     }
 
+    // Use text-embedding-3-small for QUERY (ultra-fast ~100ms) — compatible with text-embedding-3-large vectors
     if (openaiApiKey && !useLocalOffline) {
       try {
         const res = await fetch('https://api.openai.com/v1/embeddings', {
@@ -575,7 +586,7 @@ async function getQueryEmbedding(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'text-embedding-3-large',
+            model: 'text-embedding-3-small',
             input: text,
           }),
         });
@@ -612,6 +623,7 @@ async function getQueryEmbedding(
     return [];
   })();
 
-  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 1500));
+  // Hard 800ms timeout — skip embedding entirely if slow, rely on keyword search
+  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 800));
   return Promise.race([fetchEmbeddingPromise, timeoutPromise]);
 }

@@ -102,6 +102,7 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastRetrievedDocsRef = useRef<PDFDocument[]>([]);
+  const chatInputRef = useRef<HTMLInputElement>(null);
 
   // Secret Admin Trigger Refs
   const logoClickCountRef = useRef<number>(0);
@@ -1021,9 +1022,12 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Feature Cards */}
+            {/* Feature Cards — Interactive clickable shortcuts */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl animate-fade-in" style={{ animationDelay: '0.15s' }}>
-              <div className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-300 hover:-translate-y-1 cursor-default">
+              <div
+                className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-indigo-500/10 transition-all duration-300 hover:-translate-y-1 cursor-pointer active:scale-95"
+                onClick={() => fileInputRef.current?.click()}
+              >
                 <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-blue-500/20 group-hover:scale-110 transition-transform duration-300">
                   <Upload className="w-5 h-5 text-white" />
                 </div>
@@ -1033,7 +1037,13 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-purple-500/5 transition-all duration-300 hover:-translate-y-1 cursor-default">
+              <div
+                className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300 hover:-translate-y-1 cursor-pointer active:scale-95"
+                onClick={() => {
+                  chatInputRef.current?.focus();
+                  chatInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
+              >
                 <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-purple-500/20 group-hover:scale-110 transition-transform duration-300">
                   <Search className="w-5 h-5 text-white" />
                 </div>
@@ -1043,7 +1053,13 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 hover:-translate-y-1 cursor-default">
+              <div
+                className="group glass-card rounded-2xl p-5 text-center hover:shadow-lg hover:shadow-emerald-500/10 transition-all duration-300 hover:-translate-y-1 cursor-pointer active:scale-95"
+                onClick={() => {
+                  setInput('Summarize the key insights from my uploaded document');
+                  setTimeout(() => chatInputRef.current?.focus(), 100);
+                }}
+              >
                 <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-emerald-500/20 group-hover:scale-110 transition-transform duration-300">
                   <Zap className="w-5 h-5 text-white" />
                 </div>
@@ -1129,6 +1145,7 @@ export default function Home() {
                     )}
                   </Button>
                   <Input
+                    ref={chatInputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder={
