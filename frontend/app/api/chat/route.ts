@@ -231,11 +231,11 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
     if (!useLocalOffline && nvidiaApiKey) {
       // Try multiple model candidates for NVIDIA AI Endpoints using user's valid NVIDIA API Key
       const nvidiaCandidates = [
-        process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
+        'meta/llama-3.1-8b-instruct',
         'nvidia/llama-3.1-nemotron-70b-instruct',
         'meta/llama-3.1-70b-instruct',
+        process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
         'deepseek-ai/deepseek-r1',
-        'nvidia/nemotron-4-340b-instruct',
       ];
 
       for (const modelCandidate of nvidiaCandidates) {
@@ -253,9 +253,9 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
                 { role: 'user', content: message },
               ],
               stream: true,
-              temperature: 0.7,
-              top_p: 0.95,
-              max_tokens: 4096,
+              temperature: 0.2,
+              top_p: 0.9,
+              max_tokens: 2048,
             }),
           });
 

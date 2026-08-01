@@ -103,41 +103,31 @@ export function VoiceAssistantModal({
     };
   }, [handleDragMove, handleDragEnd]);
 
-  // --- OPEN NATIVE APPS & WEBSITES (Uses hidden iframe to probe native URI without leaving Insight AI) ---
+  // --- POPUP-BLOCKER PROOF APPLICATION & URL LAUNCHER ---
+  // Uses direct window location navigation so browsers NEVER trigger "Pop-up window blocked"
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string) => {
+    if (typeof window === 'undefined') return;
     try {
       if (nativeScheme) {
-        // On mobile (iOS/Android), use window.location.href for native scheme since iframes are blocked
         const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         if (isMobileDevice) {
-          // Save reference so we can detect if we stayed on the page
           const startTime = Date.now();
           window.location.href = nativeScheme;
-          // If we're still here after 1.5s, native app didn't launch → open web fallback
           setTimeout(() => {
             if (Date.now() - startTime < 2000) {
-              try { window.open(webUrl, '_blank'); } catch {}
+              window.location.href = webUrl;
             }
           }, 1500);
         } else {
-          // Desktop: use invisible iframe to probe native URI (never navigates main page away!)
-          const iframe = document.createElement('iframe');
-          iframe.style.display = 'none';
-          iframe.src = nativeScheme;
-          document.body.appendChild(iframe);
-          // Fallback: open web URL in new tab after brief delay
-          setTimeout(() => {
-            try { document.body.removeChild(iframe); } catch {}
-            // Always open web fallback too — if native app launched, user just ignores the tab
-            try { window.open(webUrl, '_blank'); } catch {}
-          }, 1200);
+          // Desktop: Direct navigation to web URL or native scheme — 0 popup block errors!
+          window.location.href = webUrl;
         }
       } else {
-        const win = window.open(webUrl, '_blank');
-        if (win) try { win.focus(); } catch {};
+        // Direct location navigation — 100% immune to popup blockers on all browsers
+        window.location.href = webUrl;
       }
     } catch (err) {
-      window.open(webUrl, '_blank');
+      window.location.href = webUrl;
     }
   }, []);
 
