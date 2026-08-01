@@ -161,21 +161,33 @@ export async function POST(req: Request) {
 
     const mermaidInstructions = [
       '3. WORLD-CLASS FLOWCHARTS & DIAGRAMS:',
-      '   When the user asks to create a flowchart, diagram, process map, architecture, or visual workflow:',
-      '   - You MUST generate an ultra-detailed, publication-quality Mermaid diagram inside a ```mermaid code block.',
-      '   - MANDATORY DIAGRAM STRUCTURE:',
-      '     * Use `graph TD` (Top-Down) or `graph LR` (Left-Right).',
-      '     * Group logical steps into 3 to 5 clear subgraphs: `subgraph Phase1["Phase 1: Ingestion"]` ... `end`.',
-      '     * Extract REAL entity names, technical steps, decision points, components, and roles directly from the DOCUMENT CONTEXT or user request.',
-      '     * Include decision diamonds `C{"Condition?"}` with labeled branches `C -->|"Yes"| D` and `C -->|"No"| E`.',
-      '     * Include 10 to 20 connected nodes for a comprehensive visual map.',
-      '     * CRITICAL SYNTAX RULES (FOR 100% PARSE SUCCESS):',
-      '       - ALWAYS write pipe labels strictly as `A -->|"Label text"| B` (NEVER add `>` after the second pipe `|`).',
-      '       - ALWAYS write subgraphs with ID and quotes: `subgraph SG1["Title with spaces"]` ... `end`.',
-      '       - NEVER use emojis or unicode symbols inside Mermaid node labels — plain text only.',
-      '       - Always wrap node labels containing spaces or special characters in double quotes: `A["Parse Text"]`.',
-      '       - Use standard connectors `-->` or `A -->|"Label"| B`. NEVER output invalid double-arrows `-->>` or semicolons `;`.',
-      '       - Do NOT output stray `classDef` or `style` lines.',
+      '   When the user asks for a flowchart, diagram, process map, architecture, or visual workflow:',
+      '   - Generate a Mermaid diagram inside a ```mermaid code block.',
+      '   - MANDATORY SYNTAX (follow EXACTLY or the diagram will break):',
+      '     * Start with `graph TD` or `graph LR`.',
+      '     * Node IDs must be simple alphanumeric: `A`, `B1`, `Step2` (NO spaces, NO special chars in IDs).',
+      '     * Always quote node labels: `A["My Label"]` for rectangles, `B{"My Question?"}` for diamonds.',
+      '     * Arrow with label: `A -->|"Yes"| B` — the label goes between two pipe characters with quotes.',
+      '     * Plain arrow: `A --> B`',
+      '     * Subgraph: `subgraph SG1["Phase Title"]` on its own line, content indented, closed with `end` on its own line.',
+      '     * NEVER use `-->>`  or `-->>>`  or `--->` — only `-->` is valid.',
+      '     * NEVER put `>` after the closing `|` in a label — `-->|"X"|> B` is INVALID.',
+      '     * NEVER use emojis, ampersands, semicolons, or HTML inside labels.',
+      '     * NEVER output `classDef`, `class`, `style`, or `linkStyle` lines.',
+      '     * Include 8-15 nodes with clear connections for a comprehensive diagram.',
+      '   - VALID EXAMPLE (copy this pattern exactly):',
+      '   ```mermaid',
+      '   graph TD',
+      '     subgraph SG1["Input Phase"]',
+      '       A["Start Process"] --> B["Validate Data"]',
+      '     end',
+      '     subgraph SG2["Processing Phase"]',
+      '       B --> C{"Data Valid?"}',
+      '       C -->|"Yes"| D["Process Data"]',
+      '       C -->|"No"| E["Return Error"]',
+      '     end',
+      '     D --> F["Output Result"]',
+      '   ```',
     ].join('\n');
 
     let liveWebContext = '';
@@ -225,21 +237,24 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 - Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
 - ${mermaidInstructions}${liveWebContext}`;
 
-    // 2) Get AI Completion Stream — Priority: NVIDIA (multi-candidate) → OpenAI → Ollama → Offline Engine
+    // 2) Get AI Completion Stream — Priority: NVIDIA (user's model FIRST) → OpenAI → Ollama → Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
     if (!useLocalOffline && nvidiaApiKey) {
-      // Try multiple model candidates for NVIDIA AI Endpoints using user's valid NVIDIA API Key
+      // User's preferred model goes FIRST for instant connection, then fast fallbacks
+      const userModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
       const nvidiaCandidates = [
+        userModel,
         'meta/llama-3.1-8b-instruct',
         'nvidia/llama-3.1-nemotron-70b-instruct',
-        'meta/llama-3.1-70b-instruct',
-        process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
-        'deepseek-ai/deepseek-r1',
       ];
 
       for (const modelCandidate of nvidiaCandidates) {
         try {
+          // 4-second timeout per candidate — fail fast, try next
+          const candidateAbort = new AbortController();
+          const candidateTimer = setTimeout(() => candidateAbort.abort(), 4000);
+
           const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -257,26 +272,36 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
               top_p: 0.9,
               max_tokens: 2048,
             }),
+            signal: candidateAbort.signal,
           });
+
+          clearTimeout(candidateTimer);
 
           if (res.ok && res.body) {
             aiResponseStream = res.body;
-            console.log(`[NVIDIA AI] Stream successfully established with model: ${modelCandidate}`);
-            break; // Successfully connected!
+            console.log(`[NVIDIA AI] Stream connected: ${modelCandidate}`);
+            break;
           } else {
-            console.log(`[NVIDIA AI] Candidate ${modelCandidate} returned status ${res.status}, trying next candidate...`);
+            console.log(`[NVIDIA AI] ${modelCandidate} status ${res.status}, trying next...`);
           }
-        } catch (err) {
-          console.log(`[NVIDIA AI] Network error trying ${modelCandidate}:`, err);
+        } catch (err: any) {
+          if (err?.name === 'AbortError') {
+            console.log(`[NVIDIA AI] ${modelCandidate} timed out (4s), trying next...`);
+          } else {
+            console.log(`[NVIDIA AI] ${modelCandidate} network error, trying next...`);
+          }
         }
       }
     }
 
     // Fallback to OpenAI if NVIDIA endpoints fail
     if (!aiResponseStream && !useLocalOffline && openaiApiKey) {
-      const openAiCandidates = ['gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4o'];
+      const openAiCandidates = ['gpt-4o-mini', 'gpt-3.5-turbo'];
       for (const modelCandidate of openAiCandidates) {
         try {
+          const oaiAbort = new AbortController();
+          const oaiTimer = setTimeout(() => oaiAbort.abort(), 4000);
+
           const res = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -293,15 +318,22 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
               temperature: 0.1,
               max_tokens: 4096,
             }),
+            signal: oaiAbort.signal,
           });
+
+          clearTimeout(oaiTimer);
 
           if (res.ok && res.body) {
             aiResponseStream = res.body;
-            console.log(`[OpenAI] Stream successfully established with model: ${modelCandidate}`);
+            console.log(`[OpenAI] Stream connected: ${modelCandidate}`);
             break;
           }
-        } catch (err) {
-          console.log(`[OpenAI] Error trying ${modelCandidate}:`, err);
+        } catch (err: any) {
+          if (err?.name === 'AbortError') {
+            console.log(`[OpenAI] ${modelCandidate} timed out (4s), trying next...`);
+          } else {
+            console.log(`[OpenAI] ${modelCandidate} error, trying next...`);
+          }
         }
       }
     }

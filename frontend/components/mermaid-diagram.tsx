@@ -77,12 +77,20 @@ function sanitizeMermaidCode(raw: string): string {
     // Strip trailing semicolons
     l = l.replace(/;+\s*$/g, '');
 
-    // FIX PIPE LABELS: Clean up quotes, replace `&` with `and`, strip trailing `>` or `|>`
-    l = l.replace(/-->\s*\|+([^|\n]+)\|+>?/g, (m, label) => {
+    // Remove ampersands globally (Mermaid parser chokes on &)
+    l = l.replace(/&/g, 'and');
+
+    // FIX: `-- text -->` pattern → `-->|"text"|`
+    l = l.replace(/--\s+"?([^">\n]+?)"?\s+-->/g, (m, label) => {
+      const cleanLabel = label.replace(/["\\]/g, '').trim();
+      return `-->|"${cleanLabel}"|`;
+    });
+
+    // FIX PIPE LABELS: Clean up quotes, strip trailing `>` or `|>`
+    l = l.replace(/-->\s*\|+([^|\n]+)\|+>?\s*/g, (m, label) => {
       const cleanLabel = label
         .replace(/^["'\s]+|["'\s]+$/g, '')
         .replace(/["\\]/g, '')
-        .replace(/&/g, 'and')
         .trim();
       return `-->|"${cleanLabel}"| `;
     });
@@ -105,10 +113,19 @@ function sanitizeMermaidCode(raw: string): string {
       if (openSubgraphs > 0) openSubgraphs--;
     }
 
-    // Fix invalid arrows
+    // Fix invalid multi-arrow patterns
+    l = l.replace(/\s*-->>>\s*/g, ' --> ');
     l = l.replace(/\s*-->>\s*/g, ' --> ');
     l = l.replace(/\s*->>>\s*/g, ' --> ');
     l = l.replace(/\s*--->\s*/g, ' --> ');
+
+    // Fix node labels with parentheses — `A(Label)` → `A["Label"]`
+    l = l.replace(/([A-Za-z0-9_]+)\(([^)"\n]+)\)/g, (m, id, label) => {
+      const cleanLabel = label.replace(/"/g, "'").trim();
+      if (definedNodes.has(id)) return id;
+      definedNodes.add(id);
+      return `${id}["${cleanLabel}"]`;
+    });
 
     // Fix node IDs with spaces
     l = l.replace(/^([A-Za-z0-9_\s]+)\["([^"]+)"\]/g, (m, id, label) => {
@@ -116,7 +133,7 @@ function sanitizeMermaidCode(raw: string): string {
       return `${cleanId}["${label}"]`;
     });
 
-    // Fix unquoted node labels
+    // Fix unquoted node labels in brackets
     l = l.replace(/([A-Za-z0-9_]+)\[([^\]"\n]+)\]/g, (m, id, label) => {
       const cleanLabel = label.replace(/"/g, "'").replace(/&/g, 'and').trim();
       if (definedNodes.has(id)) {
@@ -136,9 +153,9 @@ function sanitizeMermaidCode(raw: string): string {
       return `${id}{"${cleanLabel}"}`;
     });
 
-    // Sanitize style & classDef directives
-    if (l.startsWith('style ') || l.startsWith('classDef ') || l.startsWith('class ') || l.startsWith('linkStyle ')) {
-      l = l.replace(/;+\s*$/g, '');
+    // Remove style/classDef/linkStyle directives entirely (major source of parse errors)
+    if (/^\s*(classDef|class\s|style\s|linkStyle\s)/i.test(l)) {
+      return '';
     }
 
     return l;
@@ -269,6 +286,31 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           }
         }
 
+        // Tier 2.5: Aggressively re-sanitize all labels and fix parenthesized nodes
+        if (!parseSuccess) {
+          try {
+            sanitized = sanitized
+              // Fix A(Label) → A["Label"]
+              .replace(/([A-Za-z0-9_]+)\(([^)"]+)\)/g, '$1["$2"]')
+              // Fix broken -->| patterns missing closing pipe
+              .replace(/-->\|([^|\n]+)(?=\s+[A-Za-z])/g, '-->|"$1"| ')
+              // Remove any lines that are just text (no arrows, no subgraph, no end, no node defs)
+              .split('\n')
+              .filter((line: string) => {
+                const t = line.trim();
+                if (!t) return false;
+                if (/^(graph|flowchart|subgraph|end)/i.test(t)) return true;
+                if (t.includes('-->') || t.includes('---') || /^[A-Za-z0-9_]+[\[{("]/.test(t)) return true;
+                return false;
+              })
+              .join('\n');
+            await mermaid.parse(sanitized);
+            parseSuccess = true;
+          } catch {
+            purgeAllMermaidErrors();
+          }
+        }
+
         // Tier 3: Flatten subgraphs
         if (!parseSuccess) {
           try {
@@ -283,10 +325,12 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           }
         }
 
-        // Tier 4: Strip all pipe labels
+        // Tier 4: Strip all pipe labels and decision braces
         if (!parseSuccess) {
           try {
-            sanitized = sanitized.replace(/-->\s*\|[^|\n]+\|/g, '-->');
+            sanitized = sanitized
+              .replace(/-->\s*\|[^|\n]+\|/g, '-->')
+              .replace(/([A-Za-z0-9_]+)\{[^}]*\}/g, '$1["Decision"]');
             await mermaid.parse(sanitized);
             parseSuccess = true;
           } catch {
