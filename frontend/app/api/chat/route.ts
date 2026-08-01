@@ -225,68 +225,84 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 - Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
 - ${mermaidInstructions}${liveWebContext}`;
 
-    // 2) Get AI Completion Stream — Priority: NVIDIA Nemotron (primary) → OpenAI → Ollama → Offline Engine
+    // 2) Get AI Completion Stream — Priority: NVIDIA (multi-candidate) → OpenAI → Ollama → Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
-    // Try NVIDIA Nemotron FIRST (user's active primary key — ultra-fast reasoning model)
     if (!useLocalOffline && nvidiaApiKey) {
-      try {
-        const nvidiaModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
-        const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${nvidiaApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: nvidiaModel,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: message },
-            ],
-            stream: true,
-            temperature: 0.7,
-            top_p: 0.95,
-            max_tokens: 4096,
-          }),
-        });
+      // Try multiple model candidates for NVIDIA AI Endpoints using user's valid NVIDIA API Key
+      const nvidiaCandidates = [
+        process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
+        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'meta/llama-3.1-70b-instruct',
+        'deepseek-ai/deepseek-r1',
+        'nvidia/nemotron-4-340b-instruct',
+      ];
 
-        if (res.ok && res.body) {
-          aiResponseStream = res.body;
-        } else {
-          console.log(`[NVIDIA] API returned status ${res.status}, falling back to OpenAI...`);
+      for (const modelCandidate of nvidiaCandidates) {
+        try {
+          const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${nvidiaApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: modelCandidate,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: message },
+              ],
+              stream: true,
+              temperature: 0.7,
+              top_p: 0.95,
+              max_tokens: 4096,
+            }),
+          });
+
+          if (res.ok && res.body) {
+            aiResponseStream = res.body;
+            console.log(`[NVIDIA AI] Stream successfully established with model: ${modelCandidate}`);
+            break; // Successfully connected!
+          } else {
+            console.log(`[NVIDIA AI] Candidate ${modelCandidate} returned status ${res.status}, trying next candidate...`);
+          }
+        } catch (err) {
+          console.log(`[NVIDIA AI] Network error trying ${modelCandidate}:`, err);
         }
-      } catch (networkError) {
-        console.log('[NVIDIA] Nemotron unreachable, falling back to OpenAI...');
       }
     }
 
-    // Fallback to OpenAI GPT-4o-mini if NVIDIA fails
+    // Fallback to OpenAI if NVIDIA endpoints fail
     if (!aiResponseStream && !useLocalOffline && openaiApiKey) {
-      try {
-        const res = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openaiApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: message },
-            ],
-            stream: true,
-            temperature: 0.1,
-            max_tokens: 4096,
-          }),
-        });
+      const openAiCandidates = ['gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4o'];
+      for (const modelCandidate of openAiCandidates) {
+        try {
+          const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${openaiApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: modelCandidate,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: message },
+              ],
+              stream: true,
+              temperature: 0.1,
+              max_tokens: 4096,
+            }),
+          });
 
-        if (res.ok && res.body) {
-          aiResponseStream = res.body;
+          if (res.ok && res.body) {
+            aiResponseStream = res.body;
+            console.log(`[OpenAI] Stream successfully established with model: ${modelCandidate}`);
+            break;
+          }
+        } catch (err) {
+          console.log(`[OpenAI] Error trying ${modelCandidate}:`, err);
         }
-      } catch (networkError) {
-        console.log('[OpenAI] GPT-4o-mini unreachable, falling back to Ollama...');
       }
     }
 
@@ -322,7 +338,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
     const readable = new ReadableStream({
       start(controller) {
         if (!aiResponseStream) {
-          // Built-in Standalone Offline Extractive Intelligence Engine (Zero external dependencies)
+          // Built-in Standalone Offline Extractive & Intelligence Synthesis Engine
           const standaloneAnswer = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
           const ssePayload = {
             event: 'messages/partial',

@@ -867,19 +867,23 @@ export function VoiceAssistantModal({
     [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
   );
 
-  // --- SPEECH RECOGNITION INIT ---
+  // --- SPEECH RECOGNITION INIT (Optimized for Laptop & Mobile browsers) ---
+  const interimTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) { setRecognitionAvailable(false); return; }
 
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const rec = new SpeechRecognitionAPI();
-    rec.continuous = !isMobile;
+    // Using continuous = false on ALL devices ensures Chrome Desktop & Mobile fire onresult / onend reliably
+    rec.continuous = false;
     rec.interimResults = true;
     rec.lang = 'en-US';
 
-    rec.onstart = () => { if (!isProcessingRef.current) setAssistantState('listening'); };
+    rec.onstart = () => {
+      if (!isProcessingRef.current) setAssistantState('listening');
+    };
 
     rec.onresult = (event: any) => {
       if (isProcessingRef.current) return;
@@ -888,11 +892,19 @@ export function VoiceAssistantModal({
         const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) finalText += t; else interimText += t;
       }
-      setTranscript(finalText || interimText);
 
-      if (finalText) {
-        const cleaned = finalText.trim();
-        if (!cleaned || cleaned.length < 2) return;
+      const activeText = (finalText || interimText).trim();
+      setTranscript(activeText);
+
+      // Clear any pending silence timer
+      if (interimTimerRef.current) clearTimeout(interimTimerRef.current);
+
+      const targetText = finalText.trim() || interimText.trim();
+      if (!targetText || targetText.length < 2) return;
+
+      const handleSpeechCommand = (text: string) => {
+        const cleaned = text.trim();
+        if (!cleaned || cleaned.length < 2 || isProcessingRef.current) return;
 
         // Wake word check
         const wakePatterns = [/^(ok|okay|hey|hi)\s+insight\s*/i, /^insight\s*/i];
@@ -907,23 +919,35 @@ export function VoiceAssistantModal({
           return;
         }
         if (command.length > 1) processVoiceCommand(command);
+      };
+
+      if (finalText) {
+        handleSpeechCommand(finalText);
+      } else if (interimText && interimText.length > 3) {
+        // Laptop silence timer: if user stops speaking for 900ms, process interim text automatically!
+        interimTimerRef.current = setTimeout(() => {
+          if (!isProcessingRef.current && interimText.trim().length > 2) {
+            handleSpeechCommand(interimText);
+          }
+        }, 900);
       }
     };
 
     rec.onerror = (event: any) => {
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setRecognitionAvailable(false); setAssistantState('idle');
+        setRecognitionAvailable(false);
+        setAssistantState('idle');
       } else if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'network') {
-        // Auto-retry on transient errors instead of going idle
+        // Auto-retry on transient errors on laptops & mobiles
         if (!isProcessingRef.current && shouldRestartRef.current) {
-          setTimeout(() => { try { rec.start(); } catch {} }, 500);
+          setTimeout(() => { try { rec.start(); } catch {} }, 400);
         }
       }
     };
 
     rec.onend = () => {
       if (!isProcessingRef.current && shouldRestartRef.current) {
-        setTimeout(() => { try { rec.start(); } catch {} }, 250);
+        setTimeout(() => { try { rec.start(); } catch {} }, 200);
       }
     };
 
