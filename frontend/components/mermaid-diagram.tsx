@@ -77,14 +77,17 @@ function sanitizeMermaidCode(raw: string): string {
     // Strip trailing semicolons
     l = l.replace(/;+\s*$/g, '');
 
-    // FIX PIPE LABELS: Replace `&` with `and`, double quote labels, strip trailing `>`
-    l = l.replace(/-->\s*\|([^|\n]+)\|(?:>|\s*>)?/g, (m, label) => {
+    // FIX PIPE LABELS: Clean up quotes, replace `&` with `and`, strip trailing `>` or `|>`
+    l = l.replace(/-->\s*\|+([^|\n]+)\|+>?/g, (m, label) => {
       const cleanLabel = label
+        .replace(/^["'\s]+|["'\s]+$/g, '')
         .replace(/["\\]/g, '')
         .replace(/&/g, 'and')
         .trim();
       return `-->|"${cleanLabel}"| `;
     });
+    // Remove any remaining stray `|>` or `| >` before node names
+    l = l.replace(/\|\s*>\s*/g, '| ');
 
     // FIX SUBGRAPH HEADER BUG
     if (l.toLowerCase().startsWith('subgraph')) {
