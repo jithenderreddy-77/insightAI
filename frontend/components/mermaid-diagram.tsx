@@ -213,7 +213,7 @@ function getOrCreateHiddenContainer(): HTMLDivElement {
   return container;
 }
 
-export function MermaidDiagram({ chart }: MermaidDiagramProps) {
+function MermaidDiagramComponent({ chart }: MermaidDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>('');
   const [renderState, setRenderState] = useState<'loading' | 'success' | 'error'>('loading');
@@ -624,3 +624,11 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     </>
   );
 }
+
+export const MermaidDiagram = React.memo(
+  MermaidDiagramComponent,
+  (prevProps, nextProps) => {
+    // Only re-render if the sanitized chart code actually changed!
+    return prevProps.chart.trim() === nextProps.chart.trim();
+  }
+);

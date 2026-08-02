@@ -166,7 +166,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
                       const child = Array.isArray(children) ? children[0] : children;
                       if (child?.props?.className?.includes('language-mermaid')) {
                         const codeText = String(child.props.children).replace(/\n$/, '');
-                        return <MermaidDiagram chart={codeText} />;
+                        return <MermaidDiagram key={codeText.slice(0, 40)} chart={codeText} />;
                       }
                       // Check if the code content looks like a mermaid diagram
                       const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();

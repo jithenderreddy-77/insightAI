@@ -408,13 +408,20 @@ export default function Home() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    // 35-second client-side safety timeout — prevents indefinite loading spinners
+    const REQUEST_TIMEOUT_MS = 35000;
+    const timeoutId = setTimeout(() => {
+      console.warn('[Insight AI] Request timed out after 35s — aborting hanging stream.');
+      abortController.abort('REQUEST_TIMEOUT');
+    }, REQUEST_TIMEOUT_MS);
+
     lastRetrievedDocsRef.current = [];
 
     // --- Detect spreadsheet analytical queries ---
     const spreadsheetFileNames = Object.keys(spreadsheetSessions);
     const hasSpreadsheet = spreadsheetFileNames.length > 0;
-    const analyticalKeywords = /\b(sum|average|avg|mean|count|total|max|min|median|group|pivot|chart|plot|graph|bar|pie|line|scatter|filter|sort|rank|top|bottom|percentage|percent|trend|compare|correlation|distribution|frequency|histogram|outlier|standard deviation|variance|std|quartile)\b/i;
-    const isAnalyticalQuery = hasSpreadsheet && analyticalKeywords.test(userMessage);
+    // Route to spreadsheet code-gen agent whenever a spreadsheet is active in session
+    const isAnalyticalQuery = hasSpreadsheet;
 
     try {
       // --- SPREADSHEET ANALYTICS PATH ---
@@ -594,42 +601,38 @@ export default function Home() {
           }
         }
       }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return;
-      console.error('Error sending message:', error);
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error('[Insight AI Error]:', error);
+      const isTimeout = error === 'REQUEST_TIMEOUT' || error?.name === 'AbortError';
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-      if (isOffline) {
-        toast({
-          title: '📡 Offline Mode Active',
-          description: 'Internet connection is unavailable. Ensure your local Ollama AI model is running.',
-        });
-        setMessages((prev) => {
-          const newArr = [...prev];
-          if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+      setMessages((prev) => {
+        const newArr = [...prev];
+        if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+          if (isTimeout) {
+            newArr[newArr.length - 1].content =
+              '⏳ **Request Timed Out**: The AI model took longer than 35 seconds to complete your request.\n\n*Please try asking again, or simplify your prompt.*';
+          } else if (isOffline) {
             newArr[newArr.length - 1].content =
               '📡 **Offline Mode Active**: You are currently offline without internet.\n\nTo answer queries 100% offline, please ensure your local Ollama AI model is started on your device:\n```bash\nollama run deepseek-r1:7b\n```\nOnce Ollama is running, Insight AI will answer all your document queries, tables, and flowcharts 100% offline!';
-          }
-          return newArr;
-        });
-      } else {
-        toast({
-          title: 'Error',
-          description:
-            'Failed to send message. Please try again.\n' +
-            (error instanceof Error ? error.message : 'Unknown error'),
-          variant: 'destructive',
-        });
-        setMessages((prev) => {
-          const newArr = [...prev];
-          if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+          } else {
             newArr[newArr.length - 1].content =
-              'Sorry, there was an error processing your message. Please try again.';
+              `⚠️ **Something went wrong**: ${error instanceof Error ? error.message : String(error || 'Failed to process request')}. Please try again.`;
           }
-          return newArr;
+        }
+        return newArr;
+      });
+
+      if (!isTimeout) {
+        toast({
+          title: isOffline ? '📡 Offline Mode Active' : 'Error',
+          description: error instanceof Error ? error.message : 'Failed to send message. Please try again.',
+          variant: 'destructive',
         });
       }
     } finally {
+      clearTimeout(timeoutId);
       setIsLoading(false);
       abortControllerRef.current = null;
     }

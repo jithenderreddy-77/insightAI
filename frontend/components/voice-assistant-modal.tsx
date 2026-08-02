@@ -115,19 +115,19 @@ export function VoiceAssistantModal({
           window.location.href = nativeScheme;
           setTimeout(() => {
             if (Date.now() - startTime < 2000) {
-              window.location.href = webUrl;
+              window.open(webUrl, '_blank', 'noopener,noreferrer');
             }
           }, 1500);
         } else {
-          // Desktop: Direct navigation to web URL or native scheme — 0 popup block errors!
-          window.location.href = webUrl;
+          // Desktop: Open external app/web link in new tab — preserves current chat session!
+          window.open(webUrl, '_blank', 'noopener,noreferrer');
         }
       } else {
-        // Direct location navigation — 100% immune to popup blockers on all browsers
-        window.location.href = webUrl;
+        // Open web app in new tab — preserving active chat session context!
+        window.open(webUrl, '_blank', 'noopener,noreferrer');
       }
     } catch (err) {
-      window.location.href = webUrl;
+      window.open(webUrl, '_blank', 'noopener,noreferrer');
     }
   }, []);
 
@@ -291,10 +291,11 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Exit / Stop / No thanks / Done
+      // Exit / Stop / Stop Insight / No thanks / Done
       if (
-        q === 'no' || q === 'nothing' || q === 'no thanks' || q === 'thats all' || q === 'that is all' ||
-        q === 'stop' || q === 'close' || q === 'exit' || q === 'quit' || q === 'shut down' || q === 'goodbye' || q === 'bye' || q === 'done'
+        q === 'stop insight' || q === 'stop' || q === 'no' || q === 'nothing' || q === 'no thanks' ||
+        q === 'thats all' || q === 'that is all' || q === 'close' || q === 'exit' || q === 'quit' ||
+        q === 'shut down' || q === 'goodbye' || q === 'bye' || q === 'done'
       ) {
         speakVoiceResponse(`Alright ${userName}! Stopping now. Call me anytime!`);
         setTimeout(() => onClose(), 1500);
@@ -491,25 +492,44 @@ export function VoiceAssistantModal({
         }
       }
 
-      // --- GMAIL COMPOSE AUTOMATION ---
-      if ((q.includes('gmail') || q.includes('email')) && (q.includes('send') || q.includes('compose') || q.includes('write') || q.includes('saying'))) {
-        const contactMatch = q.match(/(?:to|write\s+to|send\s+(?:an?\s+)?(?:gmail|email)\s+to)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+)/i);
-        const contactName = contactMatch ? contactMatch[1].trim() : '';
+      // --- GMAIL COMPOSE AUTOMATION (with fuzzy recipient & structured email draft) ---
+      if ((q.includes('gmail') || q.includes('email') || q.includes('mail')) && (q.includes('send') || q.includes('compose') || q.includes('write') || q.includes('to'))) {
+        const emailMatch = q.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+        const nameMatch = q.match(/(?:to|write\s+to|send\s+(?:an?\s+)?(?:gmail|email|mail)\s+to)\s+([a-zA-Z0-9_-]+)/i);
 
-        let msg = q
-          .replace(/^(send\s+)?(a\s+)?(gmail|email)\s+(message\s+)?(saying\s+)?/gi, '')
-          .replace(/^compose\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
-          .replace(/^write\s+(a\s+)?(gmail|email)\s+(saying\s+)?/gi, '')
+        let recipientEmail = emailMatch ? emailMatch[1] : '';
+        let recipientName = nameMatch ? nameMatch[1] : '';
+
+        // If contact name was specified but no raw email, search contact store
+        if (!recipientEmail && recipientName) {
+          const matchedContacts = searchContacts(recipientName);
+          if (matchedContacts.length > 0 && matchedContacts[0].email) {
+            recipientEmail = matchedContacts[0].email;
+            recipientName = matchedContacts[0].name;
+          }
+        }
+
+        // Extract topic / message instructions
+        let rawTopic = q
+          .replace(/^(send|compose|write)\s+(a\s+)?(gmail|email|mail)\s+(to\s+[^\s]+\s+)?(about|regarding|saying)?\s*/gi, '')
           .trim();
 
-        const webUrl = msg && msg !== 'gmail' && msg !== 'email'
-          ? `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent(msg)}`
-          : 'https://mail.google.com/mail/?view=cm&fs=1';
-        const nativeScheme = msg ? `mailto:?body=${encodeURIComponent(msg)}` : 'googlegmail://';
+        const subject = rawTopic ? `Regarding: ${rawTopic.slice(0, 40)}` : 'Important Update';
+        const formattedBody = rawTopic
+          ? `Hi ${recipientName || 'there'},\n\nI am writing regarding: ${rawTopic}.\n\nBest regards,\n${userName}`
+          : `Hi ${recipientName || 'there'},\n\nHope this email finds you well.\n\nBest regards,\n${userName}`;
 
-        setActionNotice(`✅ Gmail: ${contactName || 'Opened'}`);
+        const toParam = recipientEmail ? `&to=${encodeURIComponent(recipientEmail)}` : '';
+        const webUrl = `https://mail.google.com/mail/?view=cm&fs=1${toParam}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(formattedBody)}`;
+        const nativeScheme = `mailto:${recipientEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(formattedBody)}`;
+
+        setActionNotice(`📧 Gmail Draft: ${recipientName || recipientEmail || 'Opened'}`);
         safeOpenUrl(webUrl, nativeScheme);
-        speakVoiceResponse(contactName ? `Opening Gmail to compose message for ${contactName}, ${userName}. Any other command?` : `Opening Gmail app, ${userName}. Any other command?`);
+        speakVoiceResponse(
+          recipientName || recipientEmail
+            ? `Opening Gmail to compose an email for ${recipientName || recipientEmail}, ${userName}. What's your next command?`
+            : `Opening Gmail compose window, ${userName}. What's your next command?`
+        );
         return true;
       }
 
@@ -914,12 +934,21 @@ export function VoiceAssistantModal({
       if (finalText) {
         handleSpeechCommand(finalText);
       } else if (interimText && interimText.length > 3) {
-        // Laptop silence timer: if user stops speaking for 900ms, process interim text automatically!
+        // Configurable 1.8s silence endpointing threshold to accommodate natural speech pauses
+        const SILENCE_ENDPOINT_MS = 1800;
+
+        // Check if the current phrase ends with an incomplete grammar signal (preposition/conjunction)
+        const isIncompletePhrase = /\b(the|a|an|and|or|to|with|for|of|in|on|at|is|are|was|were|about|chat|send)\s*$/i.test(interimText.trim());
+        const effectiveTimeout = isIncompletePhrase ? SILENCE_ENDPOINT_MS + 1000 : SILENCE_ENDPOINT_MS;
+
+        // Visual cue: show "Still listening..." during natural speech pauses
+        setActionNotice('🎙️ Still listening...');
+
         interimTimerRef.current = setTimeout(() => {
           if (!isProcessingRef.current && interimText.trim().length > 2) {
             handleSpeechCommand(interimText);
           }
-        }, 900);
+        }, effectiveTimeout);
       }
     };
 
