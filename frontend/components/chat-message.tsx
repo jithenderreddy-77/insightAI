@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, FileText, User } from 'lucide-react';
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PDFDocument } from '@/types/graphTypes';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
+import { DataChart } from '@/components/data-chart';
 import {
   Accordion,
   AccordionContent,
@@ -77,6 +78,23 @@ export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const isLoading = message.role === 'assistant' && message.content === '';
+
+  // Extract chart data from <!--CHART_DATA:...--> markers
+  const { displayContent, chartData } = useMemo(() => {
+    if (message.role !== 'assistant' || !message.content) {
+      return { displayContent: message.content, chartData: null };
+    }
+    const chartMatch = message.content.match(/<!--CHART_DATA:([\s\S]*?)-->/);
+    let chart = null;
+    let content = message.content;
+    if (chartMatch) {
+      try {
+        chart = JSON.parse(chartMatch[1]);
+      } catch { /* ignore malformed chart data */ }
+      content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
+    }
+    return { displayContent: content, chartData: chart };
+  }, [message.content, message.role]);
 
   const handleCopy = async () => {
     try {
@@ -207,8 +225,18 @@ export function ChatMessage({ message }: ChatMessageProps) {
                     },
                   }}
                 >
-                  {preprocessMermaidContent(message.content)}
+                  {preprocessMermaidContent(displayContent)}
                 </ReactMarkdown>
+
+                {/* Render Chart.js visualization if chart data is present */}
+                {chartData && chartData.type && chartData.labels && chartData.datasets && (
+                  <DataChart
+                    type={chartData.type}
+                    labels={chartData.labels}
+                    datasets={chartData.datasets}
+                    title={chartData.title}
+                  />
+                )}
               </div>
             )}
 

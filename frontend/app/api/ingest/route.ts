@@ -7,6 +7,8 @@ export const runtime = 'nodejs';
 export const maxDuration = 120; // seconds
 
 import { processDocument, SUPPORTED_MIME_TYPES, SUPPORTED_EXTENSIONS } from '@/lib/pdf';
+import { parseSpreadsheet, isSpreadsheetFile, SpreadsheetParseError } from '@/lib/spreadsheet-parser';
+import type { SpreadsheetData } from '@/lib/spreadsheet-parser';
 import { Document } from '@langchain/core/documents';
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAIEmbeddings } from '@langchain/openai';
@@ -36,6 +38,7 @@ export async function POST(request: NextRequest) {
     const contentType = request.headers.get('content-type') || '';
     const allDocs: Document[] = [];
     const errors: string[] = [];
+    let spreadsheetDataMap: Record<string, SpreadsheetData> = {};
 
     // Handle JSON payload (sent from client chunking for huge >4MB / 200MB+ / 2GB files)
     if (contentType.includes('application/json')) {
@@ -90,10 +93,36 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // --- Process files: extract docs for RAG + structured data for spreadsheets ---
+
       for (const file of files) {
         try {
+          // 1. Always extract text documents for the RAG pipeline
           const fileDocs = await processDocument(file);
           allDocs.push(...fileDocs);
+
+          // 2. If it's a spreadsheet, also parse structured data for the query agent
+          if (isSpreadsheetFile(file.name)) {
+            try {
+              const arrayBuffer = await file.arrayBuffer();
+              const buffer = Buffer.from(arrayBuffer);
+              const structured = parseSpreadsheet(buffer, file.name, file.size);
+              // Strip full rows from the response payload to avoid bloating the JSON
+              // Frontend will receive schema + sample rows; full rows are in offlineDocs
+              spreadsheetDataMap[file.name] = {
+                ...structured,
+                sheets: structured.sheets.map((s) => ({
+                  ...s,
+                  rows: s.rows, // Keep all rows — frontend stores in session memory
+                })),
+              };
+            } catch (ssErr: any) {
+              const msg = ssErr instanceof SpreadsheetParseError
+                ? ssErr.userMessage
+                : ssErr.message || 'Unknown spreadsheet parsing error';
+              errors.push(`Spreadsheet parse warning for ${file.name}: ${msg}`);
+            }
+          }
         } catch (error: any) {
           console.error(`Error processing file ${file.name}:`, error);
           errors.push(`Failed to process ${file.name}: ${error.message}`);
@@ -253,6 +282,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Collect spreadsheet data from the processing loop (if any spreadsheet files were uploaded)
+    const hasSpreadsheetData = Object.keys(spreadsheetDataMap).length > 0;
+
     return NextResponse.json({
       message: cloudIngested
         ? 'Documents ingested successfully to Cloud Vector DB'
@@ -260,6 +292,8 @@ export async function POST(request: NextRequest) {
       documentCount: splitDocs.length,
       isOfflineMode: !cloudIngested,
       parsedDocuments: offlineParsedDocuments,
+      // Structured spreadsheet data for the analytics query agent
+      spreadsheetData: hasSpreadsheetData ? spreadsheetDataMap : undefined,
       warnings: errors.length > 0 ? errors : undefined,
     });
   } catch (error: any) {

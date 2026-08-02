@@ -50,7 +50,7 @@ import {
   RetrieveDocumentsNodeUpdates,
 } from '@/types/graphTypes';
 
-const ACCEPTED_FILE_TYPES = '.pdf,.doc,.docx,.ppt,.pptx,.txt,.csv,.xlsx,.xls,.md,.json,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp,.tiff';
+const ACCEPTED_FILE_TYPES = '.pdf,.doc,.docx,.ppt,.pptx,.txt,.csv,.xlsx,.xls,.xlsm,.xlsb,.ods,.md,.json,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp,.tiff';
 const ACCEPTED_MIME_TYPES = [
   'application/pdf',
   'application/msword',
@@ -61,6 +61,9 @@ const ACCEPTED_MIME_TYPES = [
   'text/csv',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel.sheet.macroEnabled.12',
+  'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+  'application/vnd.oasis.opendocument.spreadsheet',
   'image/png',
   'image/jpeg',
   'image/webp',
@@ -95,6 +98,7 @@ export default function Home() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [offlineDocs, setOfflineDocs] = useState<{ text: string; filename: string }[]>([]);
+  const [spreadsheetSessions, setSpreadsheetSessions] = useState<Record<string, any>>({});
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -406,7 +410,96 @@ export default function Home() {
 
     lastRetrievedDocsRef.current = [];
 
+    // --- Detect spreadsheet analytical queries ---
+    const spreadsheetFileNames = Object.keys(spreadsheetSessions);
+    const hasSpreadsheet = spreadsheetFileNames.length > 0;
+    const analyticalKeywords = /\b(sum|average|avg|mean|count|total|max|min|median|group|pivot|chart|plot|graph|bar|pie|line|scatter|filter|sort|rank|top|bottom|percentage|percent|trend|compare|correlation|distribution|frequency|histogram|outlier|standard deviation|variance|std|quartile)\b/i;
+    const isAnalyticalQuery = hasSpreadsheet && analyticalKeywords.test(userMessage);
+
     try {
+      // --- SPREADSHEET ANALYTICS PATH ---
+      if (isAnalyticalQuery) {
+        const firstFile = spreadsheetFileNames[0];
+        const ssData = spreadsheetSessions[firstFile];
+        const activeSheet = ssData?.sheets?.[0];
+
+        if (activeSheet) {
+          const response = await fetch('/api/spreadsheet-query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: userMessage,
+              sheetData: activeSheet,
+              sheetIndex: 0,
+            }),
+            signal: abortController.signal,
+          });
+
+          const result = await response.json();
+
+          let assistantContent = '';
+
+          if (result.type === 'clarification') {
+            assistantContent = `🤔 **I need a bit more info:**\n\n${result.message}`;
+          } else if (result.type === 'error') {
+            assistantContent = `⚠️ ${result.message}`;
+            if (result.code) {
+              assistantContent += `\n\n<details>\n<summary>🔍 Show generated code</summary>\n\n\`\`\`javascript\n${result.code}\n\`\`\`\n</details>`;
+            }
+          } else if (result.type === 'answer') {
+            // Format the result
+            const formattedResult = typeof result.result === 'object'
+              ? JSON.stringify(result.result, null, 2)
+              : String(result.result);
+
+            assistantContent = `📊 **Analysis Result:**\n\n${result.explanation || ''}\n\n`;
+
+            // Render result as table if it's an array of objects
+            if (Array.isArray(result.result) && result.result.length > 0 && typeof result.result[0] === 'object') {
+              const keys = Object.keys(result.result[0]);
+              assistantContent += `| ${keys.join(' | ')} |\n| ${keys.map(() => '---').join(' | ')} |\n`;
+              for (const row of result.result.slice(0, 50)) {
+                assistantContent += `| ${keys.map(k => row[k] ?? '').join(' | ')} |\n`;
+              }
+            } else {
+              assistantContent += `\`\`\`\n${formattedResult}\n\`\`\``;
+            }
+
+            // Chart data marker for chat-message.tsx to render
+            if (result.chartData) {
+              assistantContent += `\n\n<!--CHART_DATA:${JSON.stringify(result.chartData)}-->`;
+            }
+
+            // Trust layer: show reasoning
+            if (result.code) {
+              assistantContent += `\n\n<details>\n<summary>🔍 Show reasoning (${result.executionTimeMs || 0}ms)</summary>\n\n\`\`\`javascript\n${result.code}\n\`\`\`\n</details>`;
+            }
+          } else {
+            assistantContent = result.result || result.message || 'Analysis complete.';
+          }
+
+          setMessages((prev) => {
+            const newArr = [...prev];
+            if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+              newArr[newArr.length - 1].content = assistantContent;
+            }
+            return newArr;
+          });
+
+          // Save thread
+          if (user && threadId) {
+            const finalMessages = [...messages, { role: 'user' as const, content: userMessage }, { role: 'assistant' as const, content: assistantContent }];
+            saveUserThread(user.id, { id: threadId, title: userMessage.slice(0, 60), messages: finalMessages, fileNames: files.map((f) => f.name), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+            setThreads(getUserThreads(user.id));
+          }
+
+          setIsLoading(false);
+          abortControllerRef.current = null;
+          return;
+        }
+      }
+
+      // --- REGULAR CHAT/RAG PATH ---
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
       const response = await fetch('/api/chat', {
@@ -547,6 +640,7 @@ export default function Home() {
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     return [
       '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.txt', '.csv', '.xlsx', '.xls',
+      '.xlsm', '.xlsb', '.ods',
       '.md', '.json', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.tiff'
     ].includes(ext);
   };
@@ -672,6 +766,10 @@ export default function Home() {
 
           if (data.parsedDocuments && Array.isArray(data.parsedDocuments)) {
             allParsedDocs.push(...data.parsedDocuments);
+          }
+          // Capture structured spreadsheet data for the analytics query agent
+          if (data.spreadsheetData && typeof data.spreadsheetData === 'object') {
+            setSpreadsheetSessions((prev) => ({ ...prev, ...data.spreadsheetData }));
           }
           successfulFiles.push(file);
         } catch (fileError) {

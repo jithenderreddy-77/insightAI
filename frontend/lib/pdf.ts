@@ -1,5 +1,6 @@
 import { PDFLoader } from '@langchain/community/document_loaders/fs/pdf';
 import { Document } from '@langchain/core/documents';
+import { parseSpreadsheet, isSpreadsheetFile, SpreadsheetParseError } from './spreadsheet-parser';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -17,6 +18,9 @@ export const SUPPORTED_EXTENSIONS = [
   '.csv',
   '.xlsx',
   '.xls',
+  '.xlsm',
+  '.xlsb',
+  '.ods',
   '.md',
   '.json',
   '.png',
@@ -39,6 +43,9 @@ export const SUPPORTED_MIME_TYPES = [
   'text/csv',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel.sheet.macroEnabled.12',
+  'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+  'application/vnd.oasis.opendocument.spreadsheet',
   'image/png',
   'image/jpeg',
   'image/webp',
@@ -57,13 +64,16 @@ export async function processDocument(file: File): Promise<Document[]> {
 
   if (extension === '.pdf') {
     return processPDF(file);
-  } else if (['.txt', '.md', '.json', '.csv'].includes(extension)) {
+  } else if (['.txt', '.md', '.json'].includes(extension)) {
+    return processTextFile(file);
+  } else if (extension === '.csv') {
+    // CSV can be either text-for-RAG or structured data — return text for RAG pipeline
     return processTextFile(file);
   } else if (['.doc', '.docx'].includes(extension)) {
     return processDocFile(file);
   } else if (['.ppt', '.pptx'].includes(extension)) {
     return processPPTFile(file);
-  } else if (['.xlsx', '.xls'].includes(extension)) {
+  } else if (['.xlsx', '.xls', '.xlsm', '.xlsb', '.ods'].includes(extension)) {
     return processSpreadsheetFile(file);
   } else if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.tiff'].includes(extension)) {
     return processImageFile(file);
@@ -180,22 +190,69 @@ async function processPPTFile(file: File): Promise<Document[]> {
 }
 
 /**
- * Processes Excel / Spreadsheet files (.xlsx, .xls).
+ * Processes Excel / Spreadsheet files (.xlsx, .xls, .xlsm, .xlsb, .ods).
+ * Uses SheetJS for real cell-by-cell extraction. Returns Documents for RAG
+ * and attaches structured spreadsheetData in metadata for the query agent.
  */
 async function processSpreadsheetFile(file: File): Promise<Document[]> {
   const buffer = await bufferFile(file);
-  const rawText = extractTextFromBuffer(buffer, file.name);
-  const cleaned = cleanText(rawText);
 
-  return [
-    new Document({
-      pageContent: cleaned || `Spreadsheet Data: ${file.name}\nExtracted table grid and cell contents.`,
-      metadata: {
-        filename: file.name,
-        source: file.name,
-      },
-    }),
-  ];
+  try {
+    const spreadsheetData = parseSpreadsheet(buffer, file.name, file.size);
+    const docs: Document[] = [];
+
+    for (const sheet of spreadsheetData.sheets) {
+      // Build a rich text representation for RAG vector indexing
+      const lines: string[] = [];
+      lines.push(`Spreadsheet: ${file.name} | Sheet: ${sheet.name}`);
+      lines.push(`Columns: ${sheet.headers.join(', ')}`);
+      lines.push(`Total rows: ${sheet.rowCount}`);
+      lines.push('');
+
+      // Include sample rows as readable text
+      const sampleCount = Math.min(sheet.rows.length, 50);
+      for (let i = 0; i < sampleCount; i++) {
+        const row = sheet.rows[i];
+        const vals = sheet.headers.map((h) => `${h}: ${row[h] ?? ''}`).join(' | ');
+        lines.push(`Row ${i + 1}: ${vals}`);
+      }
+
+      docs.push(
+        new Document({
+          pageContent: cleanText(lines.join('\n')),
+          metadata: {
+            filename: file.name,
+            source: file.name,
+            sheetName: sheet.name,
+            isSpreadsheet: true,
+            columnCount: sheet.headers.length,
+            rowCount: sheet.rowCount,
+          },
+        }),
+      );
+    }
+
+    return docs;
+  } catch (err) {
+    if (err instanceof SpreadsheetParseError) {
+      // Return the user-friendly error as a document so the chat can surface it
+      return [
+        new Document({
+          pageContent: `Error parsing spreadsheet "${file.name}": ${err.userMessage}`,
+          metadata: { filename: file.name, source: file.name, parseError: true },
+        }),
+      ];
+    }
+    // Fallback: try basic text extraction
+    const rawText = extractTextFromBuffer(buffer, file.name);
+    const cleaned = cleanText(rawText);
+    return [
+      new Document({
+        pageContent: cleaned || `Spreadsheet Data: ${file.name}\nExtracted table grid and cell contents.`,
+        metadata: { filename: file.name, source: file.name },
+      }),
+    ];
+  }
 }
 
 /**
