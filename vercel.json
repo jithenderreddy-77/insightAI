@@ -1,9 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "outputDirectory": "frontend/.next",
-  "buildCommand": "cd frontend && npm run build",
-  "installCommand": "cd frontend && npm install --legacy-peer-deps",
+  "buildCommand": "bash -c 'if [ -d \"frontend\" ]; then cd frontend; fi && npm run build'",
+  "installCommand": "bash -c 'if [ -d \"frontend\" ]; then cd frontend; fi && npm install --legacy-peer-deps'",
   "functions": {
     "frontend/app/api/ingest/route.ts": {
       "maxDuration": 60
