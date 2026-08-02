@@ -1,20 +1,33 @@
 // app/api/send-otp-email/route.ts
-// Sends 6-digit OTP verification email to Gmail accounts with multi-layer fallback
+// Generates and dispatches 6-digit OTP verification email to Gmail accounts with rate limiting & multi-layer fallback
 
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
+import { generateOTP } from '@/lib/otp-store';
 
 export async function POST(req: Request) {
   try {
-    const { email, otpCode, displayName } = await req.json();
+    const { email, displayName } = await req.json();
 
-    if (!email || !otpCode) {
-      return NextResponse.json({ error: 'Email and OTP code are required' }, { status: 400 });
+    if (!email || typeof email !== 'string') {
+      return NextResponse.json({ error: 'Valid email address is required' }, { status: 400 });
     }
 
-    const name = displayName || email.split('@')[0];
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // 1. Generate OTP server-side with rate-limiting check
+    const otpResult = generateOTP(normalizedEmail);
+    if (!otpResult.success || !otpResult.otpCode) {
+      return NextResponse.json(
+        { error: otpResult.error || 'Rate limit exceeded. Please wait before requesting another code.' },
+        { status: 429 }
+      );
+    }
+
+    const otpCode = otpResult.otpCode;
+    const name = displayName || normalizedEmail.split('@')[0];
 
     const gmailUser = process.env.GMAIL_SMTP_USER;
     const gmailPass = process.env.GMAIL_SMTP_APP_PASSWORD;
@@ -23,18 +36,8 @@ export async function POST(req: Request) {
     let emailSent = false;
     let sendMethod = 'none';
 
-    // 1. Try Gmail SMTP if configured
-    if (gmailUser && gmailPass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          service: 'gmail',
-          auth: {
-            user: gmailUser,
-            pass: gmailPass,
-          },
-        });
-
-        const htmlEmail = `
+    // HTML Email Template with Prominent OTP Code & Security Instructions
+    const htmlEmail = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -48,6 +51,7 @@ export async function POST(req: Request) {
     .content { padding: 30px; color: #1e293b; text-align: center; }
     .otp-box { background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 100%); border-radius: 16px; padding: 24px; border: 2px dashed #6366f1; margin: 20px 0; }
     .otp-code { font-size: 38px; font-weight: 900; letter-spacing: 10px; color: #4f46e5; font-family: 'Courier New', monospace; margin: 8px 0; }
+    .notice { font-size: 12px; color: #64748b; margin-top: 15px; border-top: 1px solid #e2e8f0; padding-top: 15px; }
     .footer { background: #0f172a; padding: 20px; text-align: center; color: #94a3b8; font-size: 11px; }
   </style>
 </head>
@@ -55,31 +59,46 @@ export async function POST(req: Request) {
   <div class="container">
     <div class="header">
       <h1>Insight AI</h1>
-      <p>Secure Verification Code</p>
+      <p>Google Account Verification</p>
     </div>
     
     <div class="content">
       <h2 style="color: #1e293b; margin-top: 0;">Hello ${name},</h2>
-      <p>Your 6-digit secret OTP verification code for signing into <strong>Insight AI</strong> is:</p>
+      <p>Your 6-digit secret verification code for signing into <strong>Insight AI</strong> is:</p>
       
       <div class="otp-box">
-        <div style="font-size: 11px; font-weight: 700; color: #6366f1; text-transform: uppercase; letter-spacing: 2px;">Verification Code</div>
+        <div style="font-size: 11px; font-weight: 700; color: #6366f1; text-transform: uppercase; letter-spacing: 2px;">One-Time Verification Code</div>
         <div class="otp-code">${otpCode}</div>
         <div style="font-size: 12px; color: #64748b;">This code expires in 10 minutes.</div>
+      </div>
+
+      <div class="notice">
+        <p>If you did not request this verification code, please ignore this email. Your Google account remains secure.</p>
       </div>
     </div>
     
     <div class="footer">
-      <p>&copy; 2026 Insight AI Engine</p>
+      <p>&copy; 2026 Insight AI Engine • Secure Google OAuth Verification</p>
     </div>
   </div>
 </body>
 </html>
 `;
 
+    // 2. Try Gmail SMTP if configured
+    if (gmailUser && gmailPass) {
+      try {
+        const transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            user: gmailUser,
+            pass: gmailPass,
+          },
+        });
+
         await transporter.sendMail({
-          from: `"Insight AI" <${gmailUser}>`,
-          to: email,
+          from: `"Insight AI Security" <${gmailUser}>`,
+          to: normalizedEmail,
           subject: `${otpCode} — Your Insight AI Verification Code`,
           html: htmlEmail,
         });
@@ -91,7 +110,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2. Try Resend API if configured
+    // 3. Try Resend API if configured
     if (!emailSent && resendApiKey) {
       try {
         const res = await fetch('https://api.resend.com/emails', {
@@ -102,9 +121,9 @@ export async function POST(req: Request) {
           },
           body: JSON.stringify({
             from: 'Insight AI <onboarding@resend.dev>',
-            to: [email],
+            to: [normalizedEmail],
             subject: `${otpCode} — Your Insight AI Verification Code`,
-            html: `<p>Hello ${name},</p><p>Your 6-digit secret OTP code for Insight AI is: <strong>${otpCode}</strong></p>`,
+            html: htmlEmail,
           }),
         });
 
@@ -117,15 +136,16 @@ export async function POST(req: Request) {
       }
     }
 
-    console.log(`[OTP DISPATCH STATUS] Email: ${email} | Code: ${otpCode} | Method: ${sendMethod} | Success: ${emailSent}`);
+    console.log(`[OTP DISPATCH STATUS] Email: ${normalizedEmail} | Method: ${sendMethod} | Success: ${emailSent}`);
 
+    // SECURITY: Never return the OTP code in the API response
     return NextResponse.json({
       success: true,
       emailSent,
       sendMethod,
       message: emailSent
-        ? `Verification code dispatched to ${email}`
-        : `Verification code generated for ${email}`,
+        ? `Verification code sent to ${normalizedEmail}`
+        : `Verification code generated for ${normalizedEmail}`,
     });
   } catch (error: any) {
     console.error('OTP route error:', error);

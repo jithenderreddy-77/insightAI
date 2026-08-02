@@ -6,16 +6,19 @@
     "author": "Mayo Oshin",
     "license": "MIT",
     "workspaces": [
-      "backend",
-      "frontend"
+        "backend",
+        "frontend"
     ],
     "packageManager": "npm@10.8.2",
     "scripts": {
-      "dev": "cd frontend && npm run dev",
-      "build": "cd frontend && npm run build",
-      "lint": "cd frontend && npm run lint"
+        "dev": "cd frontend && npm run dev",
+        "build": "cd frontend && npm run build",
+        "lint": "cd frontend && npm run lint"
     },
     "devDependencies": {
-      "turbo": "latest"
+        "turbo": "latest"
+    },
+    "dependencies": {
+        "next-auth": "^4.24.15"
     }
-  }
+}

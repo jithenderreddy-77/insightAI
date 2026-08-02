@@ -1,81 +1,78 @@
-// public/sw.js - Offline Service Worker for Insight AI PWA
+// public/sw.js - Production Service Worker for Insight AI PWA
+// Provides reliable auto-updates on Vercel redeployment & offline fallback for app shell
 
-const CACHE_NAME = 'insight-ai-pwa-v1';
-const STATIC_ASSETS = [
-  '/',
-  '/manifest.json',
-  '/title.png',
-  '/favicon.ico',
-];
+const CACHE_NAME = 'insight-ai-pwa-v2';
 
-// 1. Install Service Worker & Cache static assets
+// 1. Service Worker Installation & Immediate Activation Setup
 self.addEventListener('install', (event) => {
+  console.log('[PWA SW] Service worker installed.');
+  // Activate immediately without waiting for existing tabs to close
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[PWA SW] Pre-caching static assets for offline use');
-      return cache.addAll(STATIC_ASSETS);
-    })
-  );
 });
 
-// 2. Activate Service Worker & Clean old caches
+// 2. Service Worker Activation & Old Cache Purging
 self.addEventListener('activate', (event) => {
+  console.log('[PWA SW] Service worker activating...');
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
-            console.log('[PWA SW] Removing old cache:', key);
+            console.log('[PWA SW] Purging outdated cache:', key);
             return caches.delete(key);
           }
         })
       );
-    }).then(() => self.clients.claim())
+    }).then(() => {
+      console.log('[PWA SW] Claiming clients for instant control.');
+      return self.clients.claim();
+    })
   );
 });
 
-// 3. Intercept Network Requests with Offline Cache Fallback Strategy
+// 3. Skip Waiting Message Listener (for clean user-triggered refresh)
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.log('[PWA SW] SKIP_WAITING received — activating new worker');
+    self.skipWaiting();
+  }
+});
+
+// 4. Fetch Event Handler with Network-First Strategy for App Shell
+// EXPLICIT SECURITY GUARANTEE: /api/ routes are NEVER cached!
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests for offline caching
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
 
-  // Skip API network calls (like /api/chat or /api/ingest) from static caching
-  if (url.pathname.startsWith('/api/')) return;
+  // CRITICAL EXCLUSION: Skip all API endpoints from service worker caching
+  if (url.pathname.startsWith('/api/')) {
+    return; // Pass through directly to live network
+  }
 
+  // Network-First strategy for app shell assets (HTML, JS, CSS)
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Return cached asset immediately
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {/* Offline fallback */});
-
-        return cachedResponse;
-      }
-
-      // Network request with offline cache fallback
-      return fetch(event.request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          const responseToCache = response.clone();
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+          const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);
           });
-          return response;
-        })
-        .catch(() => {
-          // If completely offline and page request, return root cached HTML
-          if (event.request.mode === 'navigate') {
-            return caches.match('/');
-          }
-        });
-    })
+        }
+        return networkResponse;
+      })
+      .catch(async () => {
+        // Fallback to cache if completely offline
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // Navigation fallback for root HTML
+        if (event.request.mode === 'navigate') {
+          return caches.match('/');
+        }
+        return new Response('Network error', { status: 480, statusText: 'Offline' });
+      })
   );
 });

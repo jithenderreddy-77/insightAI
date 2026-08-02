@@ -33,7 +33,7 @@ import { HistorySidebar } from '@/components/history-sidebar';
 import { AdminModal } from '@/components/admin-modal';
 import { VoiceAssistantModal } from '@/components/voice-assistant-modal';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
-import { InstallAppModal } from '@/components/install-app-modal';
+import { PWAUpdateToast } from '@/components/pwa-update-toast';
 import {
   UserProfile,
   ChatThread,
@@ -857,6 +857,9 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950/20">
+      {/* PWA Auto-Update Notification Toast */}
+      <PWAUpdateToast />
+
       {/* Voice Assistant Siri/Alexa Glowing Modal */}
       <VoiceAssistantModal
         isOpen={isVoiceModalOpen}
@@ -890,15 +893,6 @@ export default function Home() {
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
         uploadedFiles={files}
-        onOpenInstallModal={() => setIsInstallModalOpen(true)}
-      />
-
-      {/* App Install / Download Modal Component */}
-      <InstallAppModal
-        isOpen={isInstallModalOpen}
-        onClose={() => setIsInstallModalOpen(false)}
-        deferredPrompt={deferredInstallPrompt}
-        onInstall={handleInstallApp}
       />
 
       {/* Auth Modal Component */}
@@ -920,7 +914,7 @@ export default function Home() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              {/* Chat History & Download App buttons */}
+              {/* Chat History button */}
               <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
@@ -930,16 +924,6 @@ export default function Home() {
                   title="Open Chat & File History"
                 >
                   <History className="w-5 h-5" />
-                </Button>
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-slate-800 transition-all hover:scale-105"
-                  onClick={() => setIsInstallModalOpen(true)}
-                  title="Download & Install Insight AI App on Android, macOS, Windows, Linux, iOS"
-                >
-                  <Download className="w-5 h-5 text-indigo-600 dark:text-indigo-400 animate-bounce" />
                 </Button>
               </div>
 
@@ -974,20 +958,6 @@ export default function Home() {
               >
                 <AnimatedVoiceLogo size="sm" />
               </button>
-
-              {/* PWA Install App Button */}
-              {isInstallable && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 rounded-xl border-indigo-200 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 font-bold text-xs shadow-sm transition-all animate-bounce"
-                  onClick={handleInstallApp}
-                  title="Install Insight AI on your device home screen"
-                >
-                  <Download className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Install App</span>
-                </Button>
-              )}
 
               {/* Return to Home Dashboard button (when in active chat) */}
               {messages.length > 0 && (

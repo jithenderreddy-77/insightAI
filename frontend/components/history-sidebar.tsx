@@ -79,8 +79,8 @@ export function HistorySidebar({
         </Button>
       </div>
 
-      {/* New Chat & Download App Buttons */}
-      <div className="p-3 space-y-2">
+      {/* New Chat Button */}
+      <div className="p-3">
         <Button
           onClick={() => {
             onNewChat();
@@ -91,21 +91,6 @@ export function HistorySidebar({
           <Plus className="w-4 h-4" />
           New Chat Session
         </Button>
-
-        {onOpenInstallModal && (
-          <Button
-            variant="outline"
-            onClick={() => {
-              onOpenInstallModal();
-              onClose();
-            }}
-            className="w-full h-9 rounded-xl border-indigo-200 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 font-bold text-xs shadow-sm gap-2 transition-all"
-            title="Download & Install Insight AI App on Android, macOS, Windows, Linux, iOS"
-          >
-            <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-bounce" />
-            <span>Download & Install App</span>
-          </Button>
-        )}
       </div>
 
       {/* Main History Scrollable Area */}
