@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone } from 'lucide-react';
+import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2 } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
 import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, type Contact } from '@/lib/contacts-store';
+import { resolveContactEntity } from '@/lib/fuzzy-entity-resolution';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -160,6 +161,10 @@ export function VoiceAssistantModal({
   const [pendingCallName, setPendingCallName] = useState<string>('');
   const [disambiguationMode, setDisambiguationMode] = useState<'tel' | 'whatsapp'>('tel');
 
+  // Two-step confirmation: after user selects a candidate, ask "yes/no" before executing
+  const [pendingConfirmContact, setPendingConfirmContact] = useState<Contact | null>(null);
+  const [confirmationMode, setConfirmationMode] = useState<'tel' | 'whatsapp'>('tel');
+
   // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
   const unlockMobileAudio = useCallback(() => {
     if (audioUnlockedRef.current) return;
@@ -291,14 +296,27 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // Exit / Stop / Stop Insight / No thanks / Done
+      // ── EXIT: The ONLY exit phrase is "thank you insight" (tolerant of STT drift) ──
+      const exitPatterns = [
+        /^thank\s*you\s*insight$/i,
+        /^thanks?\s*insight$/i,
+        /^thank\s*you\s*in\s*sight$/i,
+        /^thankyou\s*insight$/i,
+        /^thank\s*you\s*insigh?t?$/i,
+        /^thanks?\s*in\s*sight$/i,
+      ];
+      if (exitPatterns.some(p => p.test(q))) {
+        speakVoiceResponse(`Goodbye ${userName}! It was great helping you. Call me anytime!`);
+        setTimeout(() => onClose(), 2000);
+        return true;
+      }
+
+      // Legacy stop commands still work but just pause listening, NOT close
       if (
-        q === 'stop insight' || q === 'stop' || q === 'no' || q === 'nothing' || q === 'no thanks' ||
-        q === 'thats all' || q === 'that is all' || q === 'close' || q === 'exit' || q === 'quit' ||
-        q === 'shut down' || q === 'goodbye' || q === 'bye' || q === 'done'
+        q === 'stop' || q === 'stop insight' || q === 'quit' || q === 'exit' || q === 'close' ||
+        q === 'shut down' || q === 'bye' || q === 'goodbye' || q === 'done'
       ) {
-        speakVoiceResponse(`Alright ${userName}! Stopping now. Call me anytime!`);
-        setTimeout(() => onClose(), 1500);
+        speakVoiceResponse(`Pausing for now, ${userName}. Say any command when you need me again, or say "thank you insight" to end the session.`);
         return true;
       }
 
@@ -341,11 +359,46 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // --- DISAMBIGUATION SELECTION (user choosing from a list of matching contacts) ---
+      // ── PENDING CONFIRMATION: yes/no before executing the selected contact ──
+      if (pendingConfirmContact) {
+        const isAffirm = /^(yes|yeah|yep|yea|correct|sure|right|confirm|do it|go ahead|ok|okay)$/i.test(q);
+        const isDeny = /^(no|nope|nah|cancel|never\s*mind|wrong|stop)$/i.test(q);
+
+        if (isAffirm) {
+          const chosen = pendingConfirmContact;
+          const mode = confirmationMode;
+          recordContactInteraction(chosen.id);
+          setPendingConfirmContact(null);
+          setDisambiguationContacts([]);
+          setPendingCallName('');
+
+          const cleanPhone = chosen.phone.replace(/\D/g, '');
+          if (mode === 'whatsapp') {
+            safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
+            setActionNotice(`💬 WhatsApp: ${chosen.name}`);
+            speakVoiceResponse(`Opening WhatsApp for ${chosen.name}, ${userName}. What's next?`);
+          } else {
+            window.location.href = `tel:${chosen.phone}`;
+            setActionNotice(`📞 Calling ${chosen.name}`);
+            speakVoiceResponse(`Calling ${chosen.name} now, ${userName}. What's next?`);
+          }
+          return true;
+        }
+        if (isDeny) {
+          setPendingConfirmContact(null);
+          setDisambiguationContacts([]);
+          setPendingCallName('');
+          setActionNotice(null);
+          speakVoiceResponse(`Cancelled, ${userName}. What else can I help with?`);
+          return true;
+        }
+      }
+
+      // ── DISAMBIGUATION SELECTION: user choosing from numbered list ──
       if (disambiguationContacts.length > 0) {
         const ordinalMap: Record<string, number> = {
           '1': 0, 'first': 0, '1st': 0, 'one': 0,
-          '2': 0, 'second': 1, '2nd': 1, 'two': 1,
+          '2': 1, 'second': 1, '2nd': 1, 'two': 1,
           '3': 2, 'third': 2, '3rd': 2, 'three': 2,
           '4': 3, 'fourth': 3, '4th': 3, 'four': 3,
           '5': 4, 'fifth': 4, '5th': 4, 'five': 4,
@@ -355,47 +408,41 @@ export function VoiceAssistantModal({
         const ordIdx = ordinalMap[words];
         let chosen: Contact | undefined;
 
-        const isAffirmative = q === 'yes' || q === 'yeah' || q === 'yep' || q === 'correct' || q === 'sure' || q === 'right';
-        if (isAffirmative && disambiguationContacts.length > 0) {
+        // Single-candidate confirmation shortcut
+        const isAffirmative = /^(yes|yeah|yep|yea|correct|sure|right|confirm|ok|okay)$/i.test(q);
+        if (isAffirmative && disambiguationContacts.length === 1) {
           chosen = disambiguationContacts[0];
         } else if (ordIdx !== undefined && ordIdx < disambiguationContacts.length) {
           chosen = disambiguationContacts[ordIdx];
         } else {
+          // Name-based selection from disambiguation list
           chosen = disambiguationContacts.find(
             (c) => c.name.toLowerCase() === q || c.name.toLowerCase().includes(q) || q.includes(c.name.toLowerCase().split(' ')[0])
           );
         }
 
         if (chosen) {
-          recordContactInteraction(chosen.id);
-          const mode = disambiguationMode;
-          setDisambiguationContacts([]);
-          setPendingCallName('');
-
-          const cleanPhone = chosen.phone.replace(/\D/g, '');
-          if (mode === 'whatsapp') {
-            safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
-            setActionNotice(`💬 WhatsApp Call ${chosen.name}`);
-            speakVoiceResponse(`Opening WhatsApp call for ${chosen.name}, ${userName}. Any other command?`);
-          } else {
-            window.location.href = `tel:${chosen.phone}`;
-            setActionNotice(`📞 Calling ${chosen.name}`);
-            speakVoiceResponse(`Calling ${chosen.name} now, ${userName}. Any other command?`);
-          }
+          // Step 2: Ask for final yes/no confirmation before executing
+          setPendingConfirmContact(chosen);
+          setConfirmationMode(disambiguationMode);
+          const action = disambiguationMode === 'whatsapp' ? 'WhatsApp call' : 'call';
+          setActionNotice(`❓ Confirm: ${action} ${chosen.name}?`);
+          speakVoiceResponse(`${action} ${chosen.name} at ${chosen.phone}? Say yes to confirm or no to cancel.`);
           return true;
         }
 
-        if (q === 'cancel' || q === 'never mind' || q === 'nevermind' || q === 'none') {
+        if (/^(cancel|never\s*mind|nevermind|none|stop)$/i.test(q)) {
           setDisambiguationContacts([]);
           setPendingCallName('');
+          setPendingConfirmContact(null);
           setActionNotice(null);
           speakVoiceResponse(`Cancelled, ${userName}. What else can I help with?`);
           return true;
         }
       }
 
-      // --- SMART PHONE & WHATSAPP CALL WITH FUZZY DISAMBIGUATION ---
-      // Handles: "call Thanoj", "whatsapp call Thanoj", "video call Thanoj", "call Thanoj on whatsapp"
+      // ── SMART PHONE & WHATSAPP CALL WITH FUZZY ENTITY RESOLUTION ──
+      // Uses resolveContactEntity (token-level phonetic + string matching) — NEVER hallucinates contacts
       const isWhatsAppCall = q.includes('whatsapp') || q.includes('video call');
       const callMatch = q.match(/^(?:call|phone|dial|ring|whatsapp\s+call|video\s+call)\s+(.+)/i) || (q.includes('call') ? q.match(/call\s+([a-zA-Z0-9_\s]+)/i) : null);
 
@@ -407,44 +454,42 @@ export function VoiceAssistantModal({
 
         if (!searchName || searchName === 'whatsapp') return false;
 
-        const matches = searchContacts(searchName);
+        // Use resolveContactEntity for strict, non-hallucinating contact resolution
+        const resolution = resolveContactEntity(searchName, getSavedContacts());
 
-        if (matches.length === 0) {
+        if (resolution.status === 'NOT_FOUND') {
           setActionNotice(`❌ No contact: "${searchName}"`);
           speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. You can add them or sync your device contacts.`);
           return true;
         }
 
-        if (matches.length === 1) {
-          const contact = matches[0];
-          recordContactInteraction(contact.id);
-          const cleanPhone = contact.phone.replace(/\D/g, '');
-
-          if (isWhatsAppCall) {
-            safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
-            setActionNotice(`💬 WhatsApp Call ${contact.name}`);
-            speakVoiceResponse(`Opening WhatsApp call for ${contact.name}, ${userName}. Any other command?`);
-          } else {
-            window.location.href = `tel:${contact.phone}`;
-            setActionNotice(`📞 Calling ${contact.name}`);
-            speakVoiceResponse(`Calling ${contact.name} now, ${userName}. Any other command?`);
-          }
+        if (resolution.status === 'RESOLVED' && resolution.resolvedContact) {
+          // High confidence single match → ask confirmation
+          const contact = resolution.resolvedContact;
+          setPendingConfirmContact(contact);
+          setConfirmationMode(isWhatsAppCall ? 'whatsapp' : 'tel');
+          const action = isWhatsAppCall ? 'WhatsApp call' : 'call';
+          setActionNotice(`❓ Confirm: ${action} ${contact.name}?`);
+          speakVoiceResponse(`I found ${contact.name}. ${action} ${contact.name} at ${contact.phone}? Say yes to confirm or no to cancel.`);
           return true;
         }
 
-        // Multiple matches → show disambiguation list and prompt user
-        setDisambiguationContacts(matches.slice(0, 5));
-        setPendingCallName(searchName);
-        setDisambiguationMode(isWhatsAppCall ? 'whatsapp' : 'tel');
+        if (resolution.status === 'DISAMBIGUATE' && resolution.candidates && resolution.candidates.length > 0) {
+          // Multiple matches → show disambiguation list
+          const candidates = resolution.candidates.slice(0, 5);
+          setDisambiguationContacts(candidates);
+          setPendingCallName(searchName);
+          setDisambiguationMode(isWhatsAppCall ? 'whatsapp' : 'tel');
 
-        const nameList = matches.slice(0, 5).map((c, i) => `${i + 1}. ${c.name}`).join(', ');
-        const callTypeLabel = isWhatsAppCall ? 'WhatsApp call' : 'call';
-        setActionNotice(`📱 Found ${matches.length} contacts for "${searchName}"`);
-        speakVoiceResponse(
-          `I found ${matches.length} contacts matching ${searchName}: ${nameList}. ` +
-          `Which one would you like to ${callTypeLabel}, ${userName}? Say the number or name.`
-        );
-        return true;
+          const nameList = candidates.map((c, i) => `${i + 1}. ${c.name}`).join(', ');
+          const callTypeLabel = isWhatsAppCall ? 'WhatsApp call' : 'call';
+          setActionNotice(`📱 Found ${candidates.length} contacts for "${searchName}"`);
+          speakVoiceResponse(
+            `I found ${candidates.length} contacts matching ${searchName}: ${nameList}. ` +
+            `Which one would you like to ${callTypeLabel}, ${userName}? Say the number or name.`
+          );
+          return true;
+        }
       }
 
       // --- SYNC CONTACTS COMMAND ---
@@ -795,7 +840,7 @@ export function VoiceAssistantModal({
       // Let them fall through to the AI API for intelligent answers
       return false;
     },
-    [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose]
+    [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose, disambiguationContacts, disambiguationMode, pendingConfirmContact, confirmationMode]
   );
 
   // --- PROCESS VOICE COMMAND ---
@@ -1149,8 +1194,63 @@ export function VoiceAssistantModal({
             )}
           </div>
 
+          {/* Pending Confirmation Card (yes/no before executing) */}
+          {pendingConfirmContact && (
+            <div className="w-full p-3 rounded-2xl bg-slate-900/90 border border-emerald-500/40 text-left space-y-2 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Confirm Action
+                </span>
+                <span className="text-[10px] text-slate-400">Say yes or no</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700">
+                <p className="text-xs text-slate-200 font-semibold">
+                  {confirmationMode === 'whatsapp' ? '💬 WhatsApp' : '📞 Call'} <span className="text-cyan-300">{pendingConfirmContact.name}</span>
+                </p>
+                <p className="text-[11px] font-mono text-cyan-400/90 mt-0.5">{pendingConfirmContact.phone}</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const chosen = pendingConfirmContact;
+                    const mode = confirmationMode;
+                    recordContactInteraction(chosen.id);
+                    setPendingConfirmContact(null);
+                    setDisambiguationContacts([]);
+                    setPendingCallName('');
+                    const cleanPhone = chosen.phone.replace(/\D/g, '');
+                    if (mode === 'whatsapp') {
+                      safeOpenUrl(`https://wa.me/${cleanPhone}`, `whatsapp://send?phone=${cleanPhone}`);
+                      setActionNotice(`💬 WhatsApp: ${chosen.name}`);
+                      speakVoiceResponse(`Opening WhatsApp for ${chosen.name}. What's next?`);
+                    } else {
+                      window.location.href = `tel:${chosen.phone}`;
+                      setActionNotice(`📞 Calling ${chosen.name}`);
+                      speakVoiceResponse(`Calling ${chosen.name} now. What's next?`);
+                    }
+                  }}
+                  className="flex-1 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-all"
+                >
+                  ✅ Yes
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingConfirmContact(null);
+                    setDisambiguationContacts([]);
+                    setPendingCallName('');
+                    setActionNotice(null);
+                    speakVoiceResponse(`Cancelled. What else can I help with?`);
+                  }}
+                  className="flex-1 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 border border-rose-500/40 text-rose-300 text-xs font-bold transition-all"
+                >
+                  ❌ No
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Contact Disambiguation List Card */}
-          {disambiguationContacts.length > 0 && (
+          {disambiguationContacts.length > 0 && !pendingConfirmContact && (
             <div className="w-full p-3 rounded-2xl bg-slate-900/90 border border-cyan-500/40 text-left space-y-2 animate-in fade-in zoom-in duration-200">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
@@ -1163,11 +1263,12 @@ export function VoiceAssistantModal({
                   <button
                     key={c.id || i}
                     onClick={() => {
-                      setDisambiguationContacts([]);
-                      setPendingCallName('');
-                      window.location.href = `tel:${c.phone}`;
-                      setActionNotice(`📞 Calling ${c.name}`);
-                      speakVoiceResponse(`Calling ${c.name} now, ${getUserFirstName()}. Any other command?`);
+                      // Tap triggers confirmation step
+                      setPendingConfirmContact(c);
+                      setConfirmationMode(disambiguationMode);
+                      const action = disambiguationMode === 'whatsapp' ? 'WhatsApp call' : 'Call';
+                      setActionNotice(`❓ Confirm: ${action} ${c.name}?`);
+                      speakVoiceResponse(`${action} ${c.name} at ${c.phone}? Say yes to confirm or no to cancel.`);
                     }}
                     className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-800/80 hover:bg-cyan-500/20 border border-slate-700 hover:border-cyan-500/50 transition-all text-xs group"
                   >
@@ -1199,7 +1300,7 @@ export function VoiceAssistantModal({
 
           {/* Hint */}
           <p className="text-[10px] text-slate-500 text-center">
-            Say &quot;Call Thanoj&quot;, &quot;Open YouTube&quot;, &quot;Send WhatsApp message Hello&quot;, &quot;Minimize&quot;, or &quot;Stop&quot;
+            Say &quot;Call Thanoj&quot;, &quot;Open YouTube&quot;, &quot;Send WhatsApp Hello&quot;, &quot;Minimize&quot; · Exit: &quot;Thank you Insight&quot;
           </p>
         </div>
       </div>
