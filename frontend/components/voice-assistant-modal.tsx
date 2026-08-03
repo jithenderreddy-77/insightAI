@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare } from 'lucide-react';
+import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare, UserPlus } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
-import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, type Contact } from '@/lib/contacts-store';
+import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, upsertContact, type Contact } from '@/lib/contacts-store';
 import { resolveContactEntity } from '@/lib/fuzzy-entity-resolution';
 
 interface VoiceAssistantModalProps {
@@ -193,6 +193,12 @@ export function VoiceAssistantModal({
   // Failed contact resolution retry tracking (max 2 retries before giving up)
   const contactRetryCountRef = useRef(0);
   const contactRetryNameRef = useRef('');
+
+  // Inline Quick Add Contact state when a requested contact is not found
+  const [missingContactName, setMissingContactName] = useState<string>('');
+  const [showAddContact, setShowAddContact] = useState<boolean>(false);
+  const [addContactName, setAddContactName] = useState<string>('');
+  const [addContactPhone, setAddContactPhone] = useState<string>('');
 
   // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
   const unlockMobileAudio = useCallback(() => {
@@ -499,12 +505,13 @@ export function VoiceAssistantModal({
         const realContacts = getSavedContacts();
 
         if (realContacts.length === 0) {
+          setMissingContactName(searchName);
           if (isWhatsAppCall) {
             setActionNotice(`⚠️ WhatsApp opened · No contacts saved`);
-            speakVoiceResponse(`I've opened WhatsApp, but I don't have access to your saved contacts yet, ${userName}. You can sync device contacts or add them in settings.`);
+            speakVoiceResponse(`I've opened WhatsApp, but I don't have access to your saved contacts yet, ${userName}. Tap "Save Contact" below to add ${searchName}'s number.`);
           } else {
             setActionNotice(`⚠️ No contacts saved`);
-            speakVoiceResponse(`I don't have access to your saved contacts yet, ${userName}. You can sync device contacts or add them in settings.`);
+            speakVoiceResponse(`I don't have access to your saved contacts yet, ${userName}. Tap "Save Contact" below to add ${searchName}'s number.`);
           }
           return true;
         }
@@ -512,6 +519,7 @@ export function VoiceAssistantModal({
         const resolution = resolveContactEntity(searchName, realContacts);
 
         if (resolution.status === 'NOT_FOUND') {
+          setMissingContactName(searchName);
           // Track retry count for this name
           if (contactRetryNameRef.current.toLowerCase() === searchName.toLowerCase()) {
             contactRetryCountRef.current++;
@@ -630,13 +638,14 @@ export function VoiceAssistantModal({
           const realContacts = getSavedContacts();
 
           if (realContacts.length === 0) {
+            setMissingContactName(contactName);
             if (isWhatsAppIntent) {
               safeOpenUrl('https://web.whatsapp.com', 'whatsapp://');
               setActionNotice(`⚠️ WhatsApp opened · No contacts saved`);
-              speakVoiceResponse(`I've opened WhatsApp, but I don't have access to your saved contacts yet, ${userName}. You can sync device contacts or add them in settings.`);
+              speakVoiceResponse(`I've opened WhatsApp, but I don't have access to your saved contacts yet, ${userName}. Tap "Save Contact" below to add ${contactName}'s number.`);
             } else {
               setActionNotice(`⚠️ No contacts saved`);
-              speakVoiceResponse(`I don't have access to your saved contacts yet, ${userName}. You can sync device contacts or add them in settings.`);
+              speakVoiceResponse(`I don't have access to your saved contacts yet, ${userName}. Tap "Save Contact" below to add ${contactName}'s number.`);
             }
             return true;
           }
@@ -672,6 +681,7 @@ export function VoiceAssistantModal({
           }
 
           // NOT_FOUND: WhatsApp still opens, user prompted to retry
+          setMissingContactName(contactName);
           if (contactRetryNameRef.current.toLowerCase() === contactName.toLowerCase()) {
             contactRetryCountRef.current++;
           } else {
@@ -1480,6 +1490,92 @@ export function VoiceAssistantModal({
                     <span className="text-[11px] font-mono text-cyan-400/90 shrink-0 ml-2">{c.phone}</span>
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quick Add Contact Prompt Card */}
+          {missingContactName && !showAddContact && !pendingConfirmContact && disambiguationContacts.length === 0 && (
+            <div className="w-full p-3 rounded-2xl bg-slate-900/90 border border-cyan-500/40 text-left space-y-2 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  <UserPlus className="w-3.5 h-3.5 text-cyan-400" /> Save &quot;{missingContactName}&quot; to Contacts?
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                Save {missingContactName}&apos;s phone number to enable 1-click WhatsApp chats &amp; voice calls!
+              </p>
+              <button
+                onClick={() => {
+                  setAddContactName(missingContactName);
+                  setAddContactPhone('');
+                  setShowAddContact(true);
+                }}
+                className="w-full py-1.5 rounded-xl bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                <UserPlus className="w-3.5 h-3.5" /> Save {missingContactName} Phone Number
+              </button>
+            </div>
+          )}
+
+          {/* Inline Add Contact Form Card */}
+          {showAddContact && (
+            <div className="w-full p-3.5 rounded-2xl bg-slate-900/95 border border-cyan-500/50 text-left space-y-3 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  <UserPlus className="w-4 h-4 text-cyan-400" /> Save New Contact
+                </span>
+                <button onClick={() => setShowAddContact(false)} className="text-slate-400 hover:text-slate-200">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Contact Name</label>
+                  <input
+                    type="text"
+                    value={addContactName}
+                    onChange={(e) => setAddContactName(e.target.value)}
+                    placeholder="e.g. Thanoj"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Phone Number (with country code)</label>
+                  <input
+                    type="tel"
+                    value={addContactPhone}
+                    onChange={(e) => setAddContactPhone(e.target.value)}
+                    placeholder="e.g. +919876543210 or +15550192834"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    if (!addContactName.trim() || !addContactPhone.trim()) return;
+                    upsertContact({
+                      id: 'c_' + Date.now(),
+                      name: addContactName.trim(),
+                      phone: addContactPhone.trim(),
+                      label: 'Mobile',
+                    });
+                    setShowAddContact(false);
+                    setMissingContactName('');
+                    setActionNotice(`✅ Saved ${addContactName}`);
+                    speakVoiceResponse(`Saved contact ${addContactName}. Say "open ${addContactName} chat in WhatsApp" to test now!`);
+                  }}
+                  className="flex-1 py-1.5 rounded-xl bg-emerald-600/40 hover:bg-emerald-600/60 border border-emerald-500/50 text-emerald-300 text-xs font-bold transition-all"
+                >
+                  ✅ Save Contact
+                </button>
+                <button
+                  onClick={() => setShowAddContact(false)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 text-xs font-medium"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}
