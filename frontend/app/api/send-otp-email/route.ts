@@ -29,6 +29,11 @@ export async function POST(req: Request) {
     const otpCode = otpResult.otpCode;
     const name = displayName || normalizedEmail.split('@')[0];
 
+    // CONSOLE DISPLAY FOR LOCAL/DEV TESTING DISCOVERY
+    console.log('\n======================================================');
+    console.log(`🔑 [INSIGHT AI LOCAL OTP CODE]: ${otpCode} (For: ${normalizedEmail})`);
+    console.log('======================================================\n');
+
     const gmailUser = process.env.GMAIL_SMTP_USER;
     const gmailPass = process.env.GMAIL_SMTP_APP_PASSWORD;
     const resendApiKey = process.env.RESEND_API_KEY;
@@ -145,7 +150,7 @@ export async function POST(req: Request) {
       sendMethod,
       message: emailSent
         ? `Verification code sent to ${normalizedEmail}`
-        : `Verification code generated for ${normalizedEmail}`,
+        : `Verification code generated for ${normalizedEmail} (Check console log if SMTP credentials not configured locally)`,
     });
   } catch (error: any) {
     console.error('OTP route error:', error);
