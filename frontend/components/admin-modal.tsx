@@ -79,41 +79,33 @@ export function AdminModal({ isOpen, onClose }: AdminModalProps) {
       setIsAuthenticated(false);
       setActiveTab('users');
 
-      // Start with local cache immediately
-      const localData = getAllAdminData();
-      setAdminData(localData);
-      if (localData.length > 0) {
-        setSelectedUser(localData[0]);
-        if (localData[0].threads.length > 0) {
-          setActiveThreadId(localData[0].threads[0].id);
-        }
-      }
-
-      // Then fetch from Supabase cloud DB (source of truth — survives redeployments!)
+      // PRIMARY: Fetch from Supabase cloud DB (source of truth — survives redeployments!)
       getAllAdminDataFromCloud().then((cloudData) => {
         if (cloudData.length > 0) {
-          // Merge local + cloud, with cloud taking priority
-          const mergedMap = new Map<string, AdminUserData>();
-          localData.forEach((d) => mergedMap.set(d.account.id, d));
-          cloudData.forEach((d) => {
-            const existing = mergedMap.get(d.account.id);
-            if (existing) {
-              // Merge threads from cloud into local
-              const localIds = new Set(existing.threads.map((t) => t.id));
-              d.threads.forEach((ct) => {
-                if (!localIds.has(ct.id)) existing.threads.push(ct);
-              });
-              existing.account = d.account;
-              existing.plainPassword = d.plainPassword;
-            } else {
-              mergedMap.set(d.account.id, d);
+          setAdminData(cloudData);
+          setSelectedUser(cloudData[0]);
+          if (cloudData[0].threads.length > 0) {
+            setActiveThreadId(cloudData[0].threads[0].id);
+          }
+        } else {
+          // FALLBACK: If cloud returns empty (network error), use local cache
+          const localData = getAllAdminData();
+          setAdminData(localData);
+          if (localData.length > 0) {
+            setSelectedUser(localData[0]);
+            if (localData[0].threads.length > 0) {
+              setActiveThreadId(localData[0].threads[0].id);
             }
-          });
-
-          const merged = Array.from(mergedMap.values());
-          setAdminData(merged);
-          if (merged.length > 0 && !selectedUser) {
-            setSelectedUser(merged[0]);
+          }
+        }
+      }).catch(() => {
+        // Network failure fallback: use local cache
+        const localData = getAllAdminData();
+        setAdminData(localData);
+        if (localData.length > 0) {
+          setSelectedUser(localData[0]);
+          if (localData[0].threads.length > 0) {
+            setActiveThreadId(localData[0].threads[0].id);
           }
         }
       });
