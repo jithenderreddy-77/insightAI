@@ -26,8 +26,6 @@ export const viewport: Viewport = {
   maximumScale: 1,
 }
 
-import { NextAuthProvider } from "@/components/next-auth-provider"
-
 export default function RootLayout({
   children,
 }: {
@@ -43,10 +41,8 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
       <body className={GeistSans.className}>
-        <NextAuthProvider>
-          {children}
-          <Toaster />
-        </NextAuthProvider>
+        {children}
+        <Toaster />
       </body>
     </html>
   )
