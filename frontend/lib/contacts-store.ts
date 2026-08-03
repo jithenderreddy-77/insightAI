@@ -15,32 +15,28 @@ export interface Contact {
 
 const CONTACTS_STORAGE_KEY = 'insight_user_contacts';
 
-// Default initial contact list so voice calling works immediately out of the box
-const DEFAULT_CONTACTS: Contact[] = [
-  { id: 'c_1', name: 'Thanoj Reddy', phone: '+15550192834', label: 'Mobile', interactionCount: 5 },
-  { id: 'c_2', name: 'Thanoj Work', phone: '+15550199999', label: 'Work', interactionCount: 2 },
-  { id: 'c_3', name: 'Rahul Sharma', phone: '+15550183746', label: 'Mobile', interactionCount: 1 },
-  { id: 'c_4', name: 'Priya Patel', phone: '+15550172635', label: 'Mobile', interactionCount: 1 },
-  { id: 'c_5', name: 'Alex Johnson', phone: '+15550164532', label: 'Work', interactionCount: 0 },
-  { id: 'c_6', name: 'Mom', phone: '+15550153421', label: 'Home', interactionCount: 10 },
-  { id: 'c_7', name: 'Dad', phone: '+15550142310', label: 'Home', interactionCount: 8 },
-];
+// Default initial contact list is EMPTY — we NEVER synthesize or show fake contacts
+const DEFAULT_CONTACTS: Contact[] = [];
 
 /**
- * Get all saved contacts from localStorage (with auto-initialization of defaults)
+ * Get all saved contacts from localStorage (returns empty array if no real contacts exist)
  */
 export function getSavedContacts(): Contact[] {
-  if (typeof window === 'undefined') return DEFAULT_CONTACTS;
+  if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(CONTACTS_STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(DEFAULT_CONTACTS));
-      return DEFAULT_CONTACTS;
+    if (!raw) return [];
+    const parsed: Contact[] = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    
+    // Purge legacy mock contacts if present from earlier versions
+    const realContacts = parsed.filter((c) => !['c_1', 'c_2', 'c_3', 'c_4', 'c_5', 'c_6', 'c_7'].includes(c.id));
+    if (realContacts.length !== parsed.length) {
+      localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(realContacts));
     }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_CONTACTS;
+    return realContacts;
   } catch {
-    return DEFAULT_CONTACTS;
+    return [];
   }
 }
 

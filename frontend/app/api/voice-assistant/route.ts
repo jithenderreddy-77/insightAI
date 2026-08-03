@@ -384,7 +384,7 @@ function extractNameFromQuery(query: string): string {
     .replace(/\s+(on|via|using)\s+(whatsapp|gmail|email)$/i, '')
     .replace(/\s+saying.*$/i, '')
     .trim();
-  return name || 'Thanoj';
+  return name || '';
 }
 
 function extractMessageBody(query: string): string {
