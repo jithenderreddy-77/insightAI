@@ -235,11 +235,13 @@ RULES:
         });
       }
 
-      // Not found
+      // Not found — but still tell client which app to open (decoupled)
       return NextResponse.json({
-        spokenResponse: `Sorry, I couldn't find a contact matching ${searchedName}. Please check your saved contacts list.`,
+        spokenResponse: `I've opened ${channel === 'whatsapp' ? 'WhatsApp' : 'your phone app'}, but I couldn't find a contact matching ${searchedName}. Could you repeat the name or say it differently?`,
         actionType: 'CONTACT_NOT_FOUND',
         searchedName,
+        channel,
+        appToOpen: channel === 'whatsapp' ? 'https://web.whatsapp.com' : undefined,
       });
     }
 

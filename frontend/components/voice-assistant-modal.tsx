@@ -165,6 +165,10 @@ export function VoiceAssistantModal({
   const [pendingConfirmContact, setPendingConfirmContact] = useState<Contact | null>(null);
   const [confirmationMode, setConfirmationMode] = useState<'tel' | 'whatsapp'>('tel');
 
+  // Failed contact resolution retry tracking (max 2 retries before giving up)
+  const contactRetryCountRef = useRef(0);
+  const contactRetryNameRef = useRef('');
+
   // --- MOBILE AUDIO AUTOPLAY UNLOCK (iOS Safari & Android) ---
   const unlockMobileAudio = useCallback(() => {
     if (audioUnlockedRef.current) return;
@@ -441,8 +445,9 @@ export function VoiceAssistantModal({
         }
       }
 
-      // ── SMART PHONE & WHATSAPP CALL WITH FUZZY ENTITY RESOLUTION ──
-      // Uses resolveContactEntity (token-level phonetic + string matching) — NEVER hallucinates contacts
+      // ── SMART PHONE & WHATSAPP CALL WITH DECOUPLED APP-LAUNCH ──
+      // ARCHITECTURE: Step A (open app) and Step B (resolve contact) are INDEPENDENT.
+      // If contact resolution fails, the app still opens.
       const isWhatsAppCall = q.includes('whatsapp') || q.includes('video call');
       const callMatch = q.match(/^(?:call|phone|dial|ring|whatsapp\s+call|video\s+call)\s+(.+)/i) || (q.includes('call') ? q.match(/call\s+([a-zA-Z0-9_\s]+)/i) : null);
 
@@ -454,17 +459,51 @@ export function VoiceAssistantModal({
 
         if (!searchName || searchName === 'whatsapp') return false;
 
-        // Use resolveContactEntity for strict, non-hallucinating contact resolution
+        // Step A: For WhatsApp intents, ALWAYS open WhatsApp immediately (decoupled from contact resolution)
+        if (isWhatsAppCall) {
+          safeOpenUrl('https://web.whatsapp.com', 'whatsapp://');
+        }
+
+        // Step B: Resolve contact independently
         const resolution = resolveContactEntity(searchName, getSavedContacts());
 
         if (resolution.status === 'NOT_FOUND') {
-          setActionNotice(`❌ No contact: "${searchName}"`);
-          speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. You can add them or sync your device contacts.`);
+          // Track retry count for this name
+          if (contactRetryNameRef.current.toLowerCase() === searchName.toLowerCase()) {
+            contactRetryCountRef.current++;
+          } else {
+            contactRetryNameRef.current = searchName;
+            contactRetryCountRef.current = 1;
+          }
+
+          if (contactRetryCountRef.current >= 2) {
+            // After 2 failed tries, tell user to search manually
+            contactRetryCountRef.current = 0;
+            contactRetryNameRef.current = '';
+            if (isWhatsAppCall) {
+              setActionNotice(`⚠️ WhatsApp opened · No contact: "${searchName}"`);
+              speakVoiceResponse(`I've opened WhatsApp but I still can't find a contact matching ${searchName} after multiple tries. You can search for them manually in WhatsApp, ${userName}. What else can I do?`);
+            } else {
+              setActionNotice(`❌ No contact: "${searchName}"`);
+              speakVoiceResponse(`I couldn't find any contact matching ${searchName} after multiple tries, ${userName}. Please check your saved contacts. What else can I help with?`);
+            }
+          } else {
+            if (isWhatsAppCall) {
+              setActionNotice(`⚠️ WhatsApp opened · Contact not found`);
+              speakVoiceResponse(`I've opened WhatsApp, but I couldn't find a contact matching ${searchName}, ${userName}. Could you repeat the name or say it differently?`);
+            } else {
+              setActionNotice(`❌ No contact: "${searchName}"`);
+              speakVoiceResponse(`Sorry ${userName}, I couldn't find any contact matching ${searchName}. Could you repeat the name or say it differently?`);
+            }
+          }
           return true;
         }
 
+        // Reset retry on successful match
+        contactRetryCountRef.current = 0;
+        contactRetryNameRef.current = '';
+
         if (resolution.status === 'RESOLVED' && resolution.resolvedContact) {
-          // High confidence single match → ask confirmation
           const contact = resolution.resolvedContact;
           setPendingConfirmContact(contact);
           setConfirmationMode(isWhatsAppCall ? 'whatsapp' : 'tel');
@@ -475,7 +514,6 @@ export function VoiceAssistantModal({
         }
 
         if (resolution.status === 'DISAMBIGUATE' && resolution.candidates && resolution.candidates.length > 0) {
-          // Multiple matches → show disambiguation list
           const candidates = resolution.candidates.slice(0, 5);
           setDisambiguationContacts(candidates);
           setPendingCallName(searchName);
@@ -507,37 +545,120 @@ export function VoiceAssistantModal({
         return true;
       }
 
-      // --- ADVANCED CONTACT CHAT & WHATSAPP AUTOMATION ---
-      // Handles: "open Thanoj chat", "open chat of Thanoj", "message Thanoj saying meeting at 5", "send whatsapp to Thanoj Hi"
+      // ── WHATSAPP CHAT / MESSAGE AUTOMATION WITH DECOUPLED APP-LAUNCH ──
+      // Handles: "open Thanoj chat in WhatsApp", "open chat of Thanoj", "message Thanoj saying meeting at 5"
+      // ARCHITECTURE: Step A (open WhatsApp) ALWAYS succeeds. Step B (resolve contact) is independent.
       if (q.includes('whatsapp') || q.includes('chat') || q.includes('message')) {
-        const contactMatch = q.match(/(?:chat\s+(?:with|of)?|message|to|send\s+(?:a\s+)?(?:whatsapp\s+)?message\s+to|open\s+chat\s+of)\s+([a-zA-Z0-9_-]+)/i);
-        let contactName = contactMatch ? contactMatch[1].trim() : '';
+        // Extract contact name from various command patterns
+        const chatPatterns = [
+          /(?:open|go to|launch)\s+([a-zA-Z0-9_\s-]+?)\s+(?:chat|whatsapp)/i,
+          /(?:open|go to)\s+(?:chat|whatsapp\s+chat)\s+(?:of|with|for)\s+([a-zA-Z0-9_\s-]+)/i,
+          /(?:chat\s+(?:with|of)?|message|to|send\s+(?:a\s+)?(?:whatsapp\s+)?message\s+to|open\s+chat\s+of)\s+([a-zA-Z0-9_\s-]+)/i,
+        ];
+
+        let contactName = '';
+        for (const pat of chatPatterns) {
+          const m = q.match(pat);
+          if (m && m[1]) { contactName = m[1].trim(); break; }
+        }
 
         // Clean out common non-name words
-        if (['the', 'a', 'an', 'app', 'chat', 'message', 'my', 'whatsapp'].includes(contactName.toLowerCase())) {
+        contactName = contactName
+          .replace(/\s*(in|on|via|using|through)\s+(whatsapp|wa)$/gi, '')
+          .replace(/\s*(whatsapp|chat|message|app|the|a|an|my)$/gi, '')
+          .replace(/^(whatsapp|chat|message|app|the|a|an|my)\s*/gi, '')
+          .trim();
+
+        if (['the', 'a', 'an', 'app', 'chat', 'message', 'my', 'whatsapp', ''].includes(contactName.toLowerCase())) {
           contactName = '';
         }
 
-        let msg = q
-          .replace(/^(send\s+)?(a\s+)?(whatsapp\s+)?message\s+(to\s+[a-zA-Z0-9_-]+\s+)?(on\s+whatsapp\s+)?(saying\s+)?/gi, '')
-          .replace(/^open\s+(chat\s+of\s+|whatsapp\s+chat\s+for\s+)?/gi, '')
-          .replace(/\s+on\s+whatsapp$/gi, '')
-          .trim();
+        // Extract optional message body ("saying X" or trailing text)
+        let msg = '';
+        const sayingMatch = q.match(/\bsaying\s+(.+)$/i);
+        if (sayingMatch) msg = sayingMatch[1].trim();
 
-        if (contactName || msg) {
-          const textToInsert = msg || `Hi ${contactName || ''}`;
-          const webUrl = `https://web.whatsapp.com/send?text=${encodeURIComponent(textToInsert)}`;
-          const nativeScheme = `whatsapp://send?text=${encodeURIComponent(textToInsert)}`;
+        // STEP A: ALWAYS open WhatsApp first (decoupled from contact resolution)
+        const isWhatsAppIntent = q.includes('whatsapp') || q.includes('wa ');
 
-          const targetLabel = contactName ? `Chat with ${contactName}` : 'WhatsApp';
-          setActionNotice(`✅ WhatsApp: ${targetLabel}`);
-          safeOpenUrl(webUrl, nativeScheme);
+        if (contactName) {
+          // STEP B: Resolve contact against REAL contact list (never hallucinate)
+          const resolution = resolveContactEntity(contactName, getSavedContacts());
 
-          if (contactName) {
-            speakVoiceResponse(`Opening WhatsApp chat for ${contactName}, ${userName}. Is there any other command?`);
-          } else {
-            speakVoiceResponse(`Opening WhatsApp app to send message, ${userName}. Any other command?`);
+          if (resolution.status === 'RESOLVED' && resolution.resolvedContact) {
+            // Exact/high-confidence match → confirm before opening specific chat
+            const contact = resolution.resolvedContact;
+            // Open WhatsApp with this specific contact
+            const cleanPhone = contact.phone.replace(/\D/g, '');
+            const encodedMsg = msg ? `&text=${encodeURIComponent(msg)}` : '';
+            safeOpenUrl(
+              `https://wa.me/${cleanPhone}${encodedMsg ? `?${encodedMsg.slice(1)}` : ''}`,
+              `whatsapp://send?phone=${cleanPhone}${encodedMsg}`
+            );
+            recordContactInteraction(contact.id);
+            setActionNotice(`✅ WhatsApp: ${contact.name}`);
+            speakVoiceResponse(`Opening WhatsApp chat with ${contact.name}, ${userName}. What's next?`);
+            return true;
           }
+
+          if (resolution.status === 'DISAMBIGUATE' && resolution.candidates && resolution.candidates.length > 0) {
+            // Multiple matches → open WhatsApp first, then show disambiguation
+            if (isWhatsAppIntent) {
+              safeOpenUrl('https://web.whatsapp.com', 'whatsapp://');
+            }
+            const candidates = resolution.candidates.slice(0, 5);
+            setDisambiguationContacts(candidates);
+            setPendingCallName(contactName);
+            setDisambiguationMode('whatsapp');
+
+            const nameList = candidates.map((c, i) => `${i + 1}. ${c.name}`).join(', ');
+            setActionNotice(`📱 WhatsApp opened · ${candidates.length} contacts found`);
+            speakVoiceResponse(
+              `I've opened WhatsApp and found ${candidates.length} contacts matching ${contactName}: ${nameList}. ` +
+              `Which one would you like to chat with, ${userName}? Say the number or name.`
+            );
+            return true;
+          }
+
+          // NOT_FOUND: WhatsApp still opens, user prompted to retry
+          // Track retry count
+          if (contactRetryNameRef.current.toLowerCase() === contactName.toLowerCase()) {
+            contactRetryCountRef.current++;
+          } else {
+            contactRetryNameRef.current = contactName;
+            contactRetryCountRef.current = 1;
+          }
+
+          // Always open WhatsApp regardless of contact match failure
+          if (isWhatsAppIntent) {
+            safeOpenUrl('https://web.whatsapp.com', 'whatsapp://');
+          }
+
+          if (contactRetryCountRef.current >= 2) {
+            contactRetryCountRef.current = 0;
+            contactRetryNameRef.current = '';
+            setActionNotice(`⚠️ WhatsApp opened · No contact: "${contactName}"`);
+            speakVoiceResponse(`I've opened WhatsApp but I still can't find a contact matching ${contactName} after multiple tries, ${userName}. You can search for them manually in WhatsApp. What else can I do?`);
+          } else {
+            setActionNotice(`⚠️ WhatsApp opened · Contact not found`);
+            speakVoiceResponse(`I've opened WhatsApp, but I couldn't find a contact matching ${contactName}, ${userName}. Could you repeat the name or say it differently?`);
+          }
+          return true;
+        }
+
+        // No contact name → just open WhatsApp with optional pre-filled text
+        if (isWhatsAppIntent || msg) {
+          const textToInsert = msg || '';
+          if (textToInsert) {
+            safeOpenUrl(
+              `https://web.whatsapp.com/send?text=${encodeURIComponent(textToInsert)}`,
+              `whatsapp://send?text=${encodeURIComponent(textToInsert)}`
+            );
+          } else {
+            safeOpenUrl('https://web.whatsapp.com', 'whatsapp://');
+          }
+          setActionNotice('✅ WhatsApp opened');
+          speakVoiceResponse(`Opening WhatsApp, ${userName}. What's next?`);
           return true;
         }
       }
@@ -910,6 +1031,16 @@ export function VoiceAssistantModal({
               setPendingCallName(data.searchedName || '');
               setDisambiguationMode(data.pendingChannel === 'whatsapp' ? 'whatsapp' : 'tel');
               setActionNotice(`❓ ${data.clarifyingQuestion || 'Disambiguating contact'}`);
+              // Also open app if specified (decoupled)
+              if (data.appToOpen) safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
+            } else if (data.actionType === 'CONTACT_NOT_FOUND') {
+              // Decoupled: open the app even though contact wasn't found
+              if (data.appToOpen) {
+                safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
+                setActionNotice(`⚠️ ${data.channel === 'whatsapp' ? 'WhatsApp' : 'App'} opened · Contact not found`);
+              } else {
+                setActionNotice(`❌ No contact: "${data.searchedName || ''}"`);
+              }
             } else if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
               setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
               if (data.resolvedContact) recordContactInteraction(data.resolvedContact.id);
@@ -922,7 +1053,7 @@ export function VoiceAssistantModal({
               else if (a === 'open_auth') { onOpenAuth(); }
               else if (a === 'install_app') { onInstallApp(); }
             }
-            setActionNotice(`✅ Answered`);
+            setActionNotice(prev => prev || `✅ Answered`);
             speakVoiceResponse(speech);
           } catch {
             speakVoiceResponse('Sorry, I couldn\'t process that. Please try again.');
