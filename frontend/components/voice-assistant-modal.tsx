@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
-import { searchContacts, syncDeviceContacts, type Contact } from '@/lib/contacts-store';
+import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, type Contact } from '@/lib/contacts-store';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -355,7 +355,10 @@ export function VoiceAssistantModal({
         const ordIdx = ordinalMap[words];
         let chosen: Contact | undefined;
 
-        if (ordIdx !== undefined && ordIdx < disambiguationContacts.length) {
+        const isAffirmative = q === 'yes' || q === 'yeah' || q === 'yep' || q === 'correct' || q === 'sure' || q === 'right';
+        if (isAffirmative && disambiguationContacts.length > 0) {
+          chosen = disambiguationContacts[0];
+        } else if (ordIdx !== undefined && ordIdx < disambiguationContacts.length) {
           chosen = disambiguationContacts[ordIdx];
         } else {
           chosen = disambiguationContacts.find(
@@ -364,6 +367,7 @@ export function VoiceAssistantModal({
         }
 
         if (chosen) {
+          recordContactInteraction(chosen.id);
           const mode = disambiguationMode;
           setDisambiguationContacts([]);
           setPendingCallName('');
@@ -413,6 +417,7 @@ export function VoiceAssistantModal({
 
         if (matches.length === 1) {
           const contact = matches[0];
+          recordContactInteraction(contact.id);
           const cleanPhone = contact.phone.replace(/\D/g, '');
 
           if (isWhatsAppCall) {
@@ -843,15 +848,26 @@ export function VoiceAssistantModal({
             const response = await fetch('/api/voice-assistant', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ transcript: spokenTranscript, hasActiveDocuments, history: voiceHistory }),
+              body: JSON.stringify({
+                transcript: spokenTranscript,
+                hasActiveDocuments,
+                history: voiceHistory,
+                userContacts: getSavedContacts(),
+              }),
             });
             const data = await response.json();
             const speech = data.spokenResponse || 'Let me look that up for you.';
 
             setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: speech }]);
 
-            if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
+            if (data.actionType === 'DISAMBIGUATE_CONTACT' && data.candidates) {
+              setDisambiguationContacts(data.candidates);
+              setPendingCallName(data.searchedName || '');
+              setDisambiguationMode(data.pendingChannel === 'whatsapp' ? 'whatsapp' : 'tel');
+              setActionNotice(`❓ ${data.clarifyingQuestion || 'Disambiguating contact'}`);
+            } else if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
               setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
+              if (data.resolvedContact) recordContactInteraction(data.resolvedContact.id);
               safeOpenUrl(data.targetUrl);
             } else if (data.actionType === 'APP_ACTION') {
               const a = data.appAction;
