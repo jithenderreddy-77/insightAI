@@ -188,19 +188,19 @@ async function callLLM(
   nvidiaApiKey?: string,
   openaiApiKey?: string,
 ): Promise<string | null> {
-  // Try NVIDIA first, then OpenAI fallback
+  // Try high-speed candidates first for low latency
   const candidates = [
     ...(nvidiaApiKey
       ? [
           {
             url: 'https://integrate.api.nvidia.com/v1/chat/completions',
             key: nvidiaApiKey,
-            model: process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
+            model: 'meta/llama-3.1-8b-instruct',
           },
           {
             url: 'https://integrate.api.nvidia.com/v1/chat/completions',
             key: nvidiaApiKey,
-            model: 'meta/llama-3.1-8b-instruct',
+            model: process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
           },
         ]
       : []),
@@ -218,7 +218,7 @@ async function callLLM(
   for (const candidate of candidates) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
       const res = await fetch(candidate.url, {
         method: 'POST',

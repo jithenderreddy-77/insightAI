@@ -408,10 +408,10 @@ export default function Home() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
-    // 35-second client-side safety timeout — prevents indefinite loading spinners
-    const REQUEST_TIMEOUT_MS = 35000;
+    // 90-second client-side safety timeout — prevents indefinite loading spinners on slow network connections
+    const REQUEST_TIMEOUT_MS = 90000;
     const timeoutId = setTimeout(() => {
-      console.warn('[Insight AI] Request timed out after 35s — aborting hanging stream.');
+      console.warn('[Insight AI] Request timed out after 90s — aborting hanging stream.');
       abortController.abort('REQUEST_TIMEOUT');
     }, REQUEST_TIMEOUT_MS);
 
@@ -540,6 +540,7 @@ export default function Home() {
         done = chunkDone;
 
         if (value) {
+          clearTimeout(timeoutId); // Active stream connected — cancel timeout so long responses never abort midway
           sseBuffer += decoder.decode(value, { stream: true });
           const lines = sseBuffer.split('\n');
           sseBuffer = lines.pop() || '';

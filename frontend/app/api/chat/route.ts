@@ -243,19 +243,19 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
     let aiResponseStream: ReadableStream | null = null;
 
     if (!useLocalOffline && nvidiaApiKey) {
-      // User's preferred model goes FIRST for instant connection, then fast fallbacks
+      // High-speed candidates: fast Llama 3.1 8B first for sub-second responses, then user model & fallback
       const userModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
-      const nvidiaCandidates = [
-        userModel,
+      const nvidiaCandidates = Array.from(new Set([
         'meta/llama-3.1-8b-instruct',
+        userModel,
         'nvidia/llama-3.1-nemotron-70b-instruct',
-      ];
+      ]));
 
       for (const modelCandidate of nvidiaCandidates) {
         try {
-          // 4-second timeout per candidate — fail fast, try next
+          // 6-second timeout per candidate connection attempt — fail fast if unresponsive, try next
           const candidateAbort = new AbortController();
-          const candidateTimer = setTimeout(() => candidateAbort.abort(), 4000);
+          const candidateTimer = setTimeout(() => candidateAbort.abort(), 6000);
 
           const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
             method: 'POST',
