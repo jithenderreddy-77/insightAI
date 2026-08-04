@@ -1023,7 +1023,7 @@ export function VoiceAssistantModal({
     [safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onClose, disambiguationContacts, disambiguationMode, pendingConfirmContact, confirmationMode]
   );
 
-  // --- PROCESS VOICE COMMAND ---
+  // --- PROCESS VOICE COMMAND (Brain Orchestrator Primary Path) ---
   const processVoiceCommand = useCallback(
     async (spokenTranscript: string) => {
       if (isProcessingRef.current) return;
@@ -1041,81 +1041,111 @@ export function VoiceAssistantModal({
         const handled = matchClientInstantAction(spokenTranscript);
         if (handled) return;
 
-        // --- CONVERSATIONAL AI ENGINE ---
-        // All non-automation queries (questions, doubts, conversations) are sent
-        // directly to the chatbot for an intelligent answer.
-        // The response appears in the chat AND is spoken aloud.
-        setActionNotice('🧠 AI answering...');
+        // ── BRAIN ORCHESTRATOR (Primary Intelligence Path) ──
+        // The Brain uses ReAct reasoning to decide which tool to use,
+        // executes it, and returns a structured response with client actions.
+        setActionNotice('🧠 Thinking...');
 
         // Record query in history buffer
         setVoiceHistory((prev) => [...prev.slice(-6), { role: 'user', content: spokenTranscript }]);
 
         try {
-          const aiResponse = await onSendChatMessage(spokenTranscript);
+          const response = await fetch('/api/voice-assistant', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transcript: spokenTranscript,
+              hasActiveDocuments,
+              history: voiceHistory,
+              userContacts: getSavedContacts(),
+            }),
+          });
+          const data = await response.json();
+          const speech = data.spokenResponse || 'Let me help you with that.';
 
-          if (aiResponse && aiResponse.length > 0) {
-            // Trim the spoken response to ~3 sentences for TTS (keep it natural)
-            const sentences = aiResponse.replace(/[#*`>\-|]/g, '').split(/[.!?]+/).filter(s => s.trim().length > 5);
-            const spokenPart = sentences.slice(0, 3).join('. ').trim();
-            const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
+          setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: speech }]);
 
-            setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: finalSpeech }]);
-            setActionNotice('✅ Answered in chat');
-            speakVoiceResponse(finalSpeech);
-          } else {
-            setActionNotice('✅ Answered');
-            speakVoiceResponse('I\'ve answered in the chat. You can see the full response there.');
-          }
-        } catch (chatErr) {
-          console.error('Chat message error from voice:', chatErr);
-          // Fallback: use the voice-assistant API for a quick spoken answer with history
-          try {
-            const response = await fetch('/api/voice-assistant', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                transcript: spokenTranscript,
-                hasActiveDocuments,
-                history: voiceHistory,
-                userContacts: getSavedContacts(),
-              }),
-            });
-            const data = await response.json();
-            const speech = data.spokenResponse || 'Let me look that up for you.';
+          // ── HANDLE BRAIN RESPONSE BY ACTION TYPE ──
 
-            setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: speech }]);
-
-            if (data.actionType === 'DISAMBIGUATE_CONTACT' && data.candidates) {
-              setDisambiguationContacts(data.candidates);
-              setPendingCallName(data.searchedName || '');
-              setDisambiguationMode(data.pendingChannel === 'whatsapp' ? 'whatsapp_chat' : 'tel');
-              setActionNotice(`❓ ${data.clarifyingQuestion || 'Disambiguating contact'}`);
-              // Also open app if specified (decoupled)
-              if (data.appToOpen) safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
-            } else if (data.actionType === 'CONTACT_NOT_FOUND') {
-              // Decoupled: open the app even though contact wasn't found
-              if (data.appToOpen) {
-                safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
-                setActionNotice(`⚠️ ${data.channel === 'whatsapp' ? 'WhatsApp' : 'App'} opened · Contact not found`);
-              } else {
-                setActionNotice(`❌ No contact: "${data.searchedName || ''}"`);
-              }
-            } else if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
-              setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
-              if (data.resolvedContact) recordContactInteraction(data.resolvedContact.id);
-              safeOpenUrl(data.targetUrl);
-            } else if (data.actionType === 'APP_ACTION') {
-              const a = data.appAction;
-              if (a === 'upload_document') { onTriggerUpload(); }
-              else if (a === 'new_chat') { setVoiceHistory([]); onNewChat(); }
-              else if (a === 'open_history') { onOpenHistory(); }
-              else if (a === 'open_auth') { onOpenAuth(); }
-              else if (a === 'install_app') { onInstallApp(); }
+          if (data.actionType === 'DISAMBIGUATE_CONTACT' && data.candidates) {
+            setDisambiguationContacts(data.candidates);
+            setPendingCallName(data.searchedName || '');
+            setDisambiguationMode(data.pendingChannel === 'whatsapp' ? 'whatsapp_chat' : 'tel');
+            setActionNotice(`❓ ${data.clarifyingQuestion || 'Disambiguating contact'}`);
+            if (data.appToOpen) safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
+          } else if (data.actionType === 'CONTACT_NOT_FOUND') {
+            if (data.appToOpen) {
+              safeOpenUrl(data.appToOpen, data.channel === 'whatsapp' ? 'whatsapp://' : undefined);
+              setActionNotice(`⚠️ ${data.channel === 'whatsapp' ? 'WhatsApp' : 'App'} opened · Contact not found`);
+            } else {
+              setActionNotice(`❌ No contact: "${data.searchedName || ''}"`);
             }
-            setActionNotice(prev => prev || `✅ Answered`);
-            speakVoiceResponse(speech);
+          } else if (data.actionType === 'OPEN_WEBSITE' && data.targetUrl) {
+            setActionNotice(`✅ ${data.targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 30)}`);
+            if (data.resolvedContact) recordContactInteraction(data.resolvedContact.id);
+            safeOpenUrl(data.targetUrl);
+          } else if (data.actionType === 'PHONE_CALL' && data.phoneNumber) {
+            setActionNotice(`📞 Calling ${data.resolvedContact?.name || data.phoneNumber}`);
+            safeOpenUrl(`tel:${data.phoneNumber}`);
+          } else if (data.actionType === 'APP_ACTION') {
+            const a = data.appAction;
+            if (a === 'upload_document') { onTriggerUpload(); }
+            else if (a === 'new_chat') { setVoiceHistory([]); onNewChat(); }
+            else if (a === 'open_history') { onOpenHistory(); }
+            else if (a === 'open_auth') { onOpenAuth(); }
+            else if (a === 'install_app') { onInstallApp(); }
+          } else if (data.actionType === 'DOCUMENT_QA') {
+            // Route to the chat pipeline for full RAG response
+            try {
+              const aiResponse = await onSendChatMessage(spokenTranscript);
+              if (aiResponse && aiResponse.length > 0) {
+                const sentences = aiResponse.replace(/[#*`>\-|]/g, '').split(/[.!?]+/).filter((s: string) => s.trim().length > 5);
+                const spokenPart = sentences.slice(0, 3).join('. ').trim();
+                const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
+                setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: finalSpeech }]);
+                setActionNotice('✅ Answered from document');
+                speakVoiceResponse(finalSpeech);
+                return;
+              }
+            } catch {
+              // Fall through to speak the Brain's response
+            }
+          } else if (data.actionType === 'KNOWLEDGE_ANSWER' && !data.liveDataUsed) {
+            // For pure knowledge questions, try the chat pipeline for richer answers
+            try {
+              const aiResponse = await onSendChatMessage(spokenTranscript);
+              if (aiResponse && aiResponse.length > 0) {
+                const sentences = aiResponse.replace(/[#*`>\-|]/g, '').split(/[.!?]+/).filter((s: string) => s.trim().length > 5);
+                const spokenPart = sentences.slice(0, 3).join('. ').trim();
+                const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
+                setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: finalSpeech }]);
+                setActionNotice('✅ Answered in chat');
+                speakVoiceResponse(finalSpeech);
+                return;
+              }
+            } catch {
+              // Fall through to speak the Brain's response
+            }
+          }
+
+          setActionNotice(prev => prev || `✅ Answered`);
+          speakVoiceResponse(speech);
+        } catch (brainErr) {
+          console.error('Brain orchestrator error:', brainErr);
+          // Last resort fallback — try direct chat
+          try {
+            const aiResponse = await onSendChatMessage(spokenTranscript);
+            if (aiResponse && aiResponse.length > 0) {
+              const sentences = aiResponse.replace(/[#*`>\-|]/g, '').split(/[.!?]+/).filter((s: string) => s.trim().length > 5);
+              const spokenPart = sentences.slice(0, 3).join('. ').trim();
+              const finalSpeech = spokenPart.length > 10 ? spokenPart + '.' : aiResponse.slice(0, 200);
+              setVoiceHistory((prev) => [...prev.slice(-6), { role: 'assistant', content: finalSpeech }]);
+              speakVoiceResponse(finalSpeech);
+            } else {
+              speakVoiceResponse('Sorry, I couldn\'t process that. Please try again.');
+            }
           } catch {
-            speakVoiceResponse('Sorry, I couldn\'t process that. Please try again.');
+            speakVoiceResponse('Sorry, I encountered an issue. Please try again.');
           }
         }
       } catch (err) {
