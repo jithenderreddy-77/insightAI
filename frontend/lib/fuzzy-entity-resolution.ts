@@ -198,8 +198,22 @@ export function resolveContactEntity(rawNameQuery: string, availableContacts?: C
   const queryMetaphones = queryWords.map(w => metaphone(w));
   const querySoundexes = queryWords.map(w => soundex(w));
 
+  // Relationship term resolution mapping
+  const relationshipAliases: Record<string, string[]> = {
+    mummy: ['mom', 'mother', 'mummy', 'amma', 'maa'],
+    mom: ['mom', 'mother', 'mummy', 'amma', 'maa'],
+    mother: ['mom', 'mother', 'mummy', 'amma', 'maa'],
+    dad: ['dad', 'father', 'daddy', 'nanna', 'pa'],
+    father: ['dad', 'father', 'daddy', 'nanna', 'pa'],
+    wife: ['wife', 'spouse', 'honey', 'darling'],
+    brother: ['brother', 'bro', 'bhai'],
+    manager: ['manager', 'boss', 'lead'],
+    hr: ['hr', 'human resources', 'recruiter'],
+  };
+
   const scored: ContactMatchScore[] = contacts.map(contact => {
     const nameLower = contact.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const labelLower = (contact.label || '').toLowerCase();
     const nameWords = nameLower.split(/\s+/).filter(w => w.length > 0);
     const nameMetaphones = nameWords.map(w => metaphone(w));
     const nameSoundexes = nameWords.map(w => soundex(w));
@@ -208,6 +222,17 @@ export function resolveContactEntity(rawNameQuery: string, availableContacts?: C
     let phoneticMatch = false;
     let stringSim = 0;
     let reason = '';
+
+    // ── PASS 0: Relationship Term Matching ──
+    for (const [relKey, aliases] of Object.entries(relationshipAliases)) {
+      if (aliases.includes(queryLower)) {
+        if (aliases.some(a => nameLower.includes(a) || labelLower.includes(a))) {
+          score = 98;
+          reason = `Relationship alias match for "${relKey}"`;
+          break;
+        }
+      }
+    }
 
     // ── PASS 1: Exact full-name match ──
     if (nameLower === queryLower) {

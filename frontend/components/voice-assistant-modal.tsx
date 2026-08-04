@@ -13,6 +13,11 @@ import { TaskTimelinePanel } from '@/components/task-timeline-panel';
 import { PluginsSkillsManager } from '@/components/plugins-skills-manager';
 import { TaskSchedulerModal } from '@/components/task-scheduler-modal';
 import { VoiceSettingsModal } from '@/components/voice-settings-modal';
+import { NeonStarWidget } from '@/components/neon-star-widget';
+import { PermissionsGuideModal } from '@/components/permissions-guide-modal';
+import { getDeviceContext } from '@/lib/brain/device-context';
+import { buildRecoveryStrategy } from '@/lib/brain/recovery-engine';
+import { learningEngine } from '@/lib/brain/learning-engine';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -80,6 +85,7 @@ export function VoiceAssistantModal({
   const [showPluginsManager, setShowPluginsManager] = useState(false);
   const [showTaskScheduler, setShowTaskScheduler] = useState(false);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [showPermissionsGuide, setShowPermissionsGuide] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [typedCommand, setTypedCommand] = useState('');
   const textInputRef = useRef<HTMLInputElement>(null);
@@ -1337,36 +1343,18 @@ export function VoiceAssistantModal({
 
   if (!isOpen) return null;
 
-  // --- MINIMIZED FLOATING DRAGGABLE LOGO ORB ---
+  // --- MINIMIZED MOVABLE NEON STAR WIDGET ---
   if (isMinimized) {
     return (
-      <div
-        ref={orbRef}
-        className="fixed z-[9999] select-none touch-none cursor-grab active:cursor-grabbing"
-        style={{ left: orbPos.x, top: orbPos.y }}
-        onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
-        onTouchStart={(e) => { if (e.touches[0]) handleDragStart(e.touches[0].clientX, e.touches[0].clientY); }}
-      >
-        <AnimatedVoiceLogo
-          size="md"
-          state={assistantState}
-          onClick={() => { if (!isDraggingRef.current) setIsMinimized(false); }}
-        />
-
-        {/* Mini transcript badge */}
-        {transcript && (
-          <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-slate-900/95 border border-cyan-500/40 text-[10px] text-cyan-300 font-medium max-w-[150px] truncate shadow-lg pointer-events-none">
-            {transcript}
-          </div>
-        )}
-
-        {/* Action notice badge */}
-        {actionNotice && (
-          <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full bg-emerald-900/95 border border-emerald-500/40 text-[10px] text-emerald-300 font-bold max-w-[180px] truncate shadow-lg pointer-events-none">
-            {actionNotice}
-          </div>
-        )}
-      </div>
+      <NeonStarWidget
+        assistantState={assistantState}
+        onActivate={() => {
+          unlockMobileAudio();
+          setIsMinimized(false);
+          if (assistantState === 'idle') toggleListening();
+        }}
+        onClose={onClose}
+      />
     );
   }
 
@@ -1756,6 +1744,7 @@ export function VoiceAssistantModal({
       <PluginsSkillsManager isOpen={showPluginsManager} onClose={() => setShowPluginsManager(false)} />
       <TaskSchedulerModal isOpen={showTaskScheduler} onClose={() => setShowTaskScheduler(false)} />
       <VoiceSettingsModal isOpen={showVoiceSettings} onClose={() => setShowVoiceSettings(false)} />
+      <PermissionsGuideModal isOpen={showPermissionsGuide} onClose={() => setShowPermissionsGuide(false)} />
     </div>
   );
 }
