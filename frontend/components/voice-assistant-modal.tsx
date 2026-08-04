@@ -1,12 +1,18 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare, UserPlus } from 'lucide-react';
+import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare, UserPlus, Send, Brain, ShieldAlert, Activity, Code2, Clock, Settings, Search } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
 import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, upsertContact, type Contact } from '@/lib/contacts-store';
 import { resolveContactEntity } from '@/lib/fuzzy-entity-resolution';
 import { generateGreeting, trackUsage, generateSuggestions, type ProactiveInsight } from '@/lib/brain/proactive-engine';
+import { MemoryEditorModal } from '@/components/memory-editor-modal';
+import { AutomationApprovalCenter } from '@/components/automation-approval-center';
+import { TaskTimelinePanel } from '@/components/task-timeline-panel';
+import { PluginsSkillsManager } from '@/components/plugins-skills-manager';
+import { TaskSchedulerModal } from '@/components/task-scheduler-modal';
+import { VoiceSettingsModal } from '@/components/voice-settings-modal';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -67,6 +73,31 @@ export function VoiceAssistantModal({
   const [recognitionAvailable, setRecognitionAvailable] = useState(true);
   const [commandLog, setCommandLog] = useState<string[]>([]);
   const [isMinimized, setIsMinimized] = useState(false);
+
+  // New UI Modal & Panel States
+  const [showMemoryEditor, setShowMemoryEditor] = useState(false);
+  const [showApprovalCenter, setShowApprovalCenter] = useState(false);
+  const [showPluginsManager, setShowPluginsManager] = useState(false);
+  const [showTaskScheduler, setShowTaskScheduler] = useState(false);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [typedCommand, setTypedCommand] = useState('');
+  const textInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard Shortcuts Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isOpen) return;
+      if (e.key === '/' && document.activeElement !== textInputRef.current) {
+        e.preventDefault();
+        textInputRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Draggable floating orb position
   const [orbPos, setOrbPos] = useState({ x: -1, y: -1 });
@@ -1346,34 +1377,88 @@ export function VoiceAssistantModal({
         className="relative sm:max-w-md w-[92vw] rounded-3xl p-0 overflow-hidden border border-cyan-500/30 shadow-[0_0_80px_rgba(6,182,212,0.3)] bg-slate-950/95 backdrop-blur-2xl text-white"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Bar */}
-        <div className="p-4 px-6 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/50">
+        {/* Top Bar with OS Action Tools */}
+        <div className="p-3 px-4 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/60">
           <div className="flex items-center gap-2">
             <AnimatedVoiceLogo size="sm" state={assistantState} />
-            <span className="font-extrabold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
-              INSIGHT VOICE
+            <span className="font-extrabold text-xs tracking-wider bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">
+              INSIGHT AI OS
             </span>
           </div>
+
+          {/* Quick Action Toolbar */}
           <div className="flex items-center gap-1">
             <button
-              className="h-8 w-8 rounded-full flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
+              onClick={() => setShowMemoryEditor(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-purple-400 hover:bg-slate-800 transition-all"
+              title="Memory Viewer & Editor"
+            >
+              <Brain className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowApprovalCenter(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-slate-800 transition-all"
+              title="Automation Approval Center"
+            >
+              <ShieldAlert className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowTimeline((prev) => !prev)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-all"
+              title="Task Timeline & Agent Monitor"
+            >
+              <Activity className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowPluginsManager(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-400 hover:bg-slate-800 transition-all"
+              title="Plugins & Skills Manager"
+            >
+              <Code2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowTaskScheduler(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-pink-400 hover:bg-slate-800 transition-all"
+              title="Task Scheduler & Reminders"
+            >
+              <Clock className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowVoiceSettings(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition-all"
+              title="Voice & OS Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
+            <div className="w-px h-4 bg-slate-800 my-auto mx-1" />
+
+            <button
+              className="h-7 w-7 rounded-full flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
               onClick={() => setIsMinimized(true)}
               title="Minimize to floating logo"
             >
-              <Minimize2 className="w-4 h-4" />
+              <Minimize2 className="w-3.5 h-3.5" />
             </button>
             <button
-              className="h-8 w-8 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+              className="h-7 w-7 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
               onClick={onClose}
               title="Close assistant"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Central Animated Voice Logo */}
-        <div className="p-6 py-8 flex flex-col items-center justify-center gap-5 relative overflow-hidden">
+        {/* Task Timeline Panel Drawer */}
+        {showTimeline && (
+          <div className="p-3 border-b border-slate-800 bg-slate-950/80 animate-in slide-in-from-top duration-200">
+            <TaskTimelinePanel />
+          </div>
+        )}
+
+        {/* Central Animated Voice Logo & Dual Command Bar */}
+        <div className="p-6 py-6 flex flex-col items-center justify-center gap-4 relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-b from-cyan-500/10 via-fuchsia-500/10 to-indigo-500/10 blur-3xl pointer-events-none" />
 
           <AnimatedVoiceLogo
@@ -1614,10 +1699,42 @@ export function VoiceAssistantModal({
             </div>
           )}
 
+          {/* Prominent Text Command Search Bar */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!typedCommand.trim()) return;
+              const text = typedCommand.trim();
+              setTypedCommand('');
+              processVoiceCommand(text);
+            }}
+            className="w-full relative flex items-center pt-2"
+          >
+            <div className="relative w-full flex items-center">
+              <Search className="w-4 h-4 absolute left-3.5 text-slate-400 pointer-events-none" />
+              <input
+                ref={textInputRef}
+                type="text"
+                value={typedCommand}
+                onChange={(e) => setTypedCommand(e.target.value)}
+                placeholder="Type command or question... (Press / to focus)"
+                className="w-full pl-10 pr-11 py-2.5 rounded-2xl bg-slate-900 border border-slate-800 focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/60 text-xs text-white placeholder:text-slate-500 font-medium transition-all shadow-inner"
+              />
+              <button
+                type="submit"
+                disabled={!typedCommand.trim()}
+                className="absolute right-1.5 p-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-30 disabled:pointer-events-none text-white transition-all shadow-md"
+                title="Send Command"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </form>
+
           {/* Recent Commands */}
           {commandLog.length > 0 && (
             <div className="w-full pt-2 border-t border-slate-800/60">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 text-center mb-1.5">Recent</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 text-center mb-1.5">Recent Tasks</p>
               <div className="flex flex-wrap gap-1.5 justify-center">
                 {commandLog.map((cmd, i) => (
                   <span key={i} className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-[10px] text-slate-400 truncate max-w-[140px]">{cmd}</span>
@@ -1628,10 +1745,17 @@ export function VoiceAssistantModal({
 
           {/* Hint */}
           <p className="text-[10px] text-slate-500 text-center">
-            Say &quot;Call Thanoj&quot;, &quot;Open YouTube&quot;, &quot;Send WhatsApp Hello&quot;, &quot;Minimize&quot; · Exit: &quot;Thank you Insight&quot;
+            🎙️ Voice or ⌨️ Type commands · Press <kbd className="px-1 font-mono text-[9px] bg-slate-800 rounded border border-slate-700 text-slate-300">/</kbd> to focus text box
           </p>
         </div>
       </div>
+
+      {/* Sub-Component Modals */}
+      <MemoryEditorModal isOpen={showMemoryEditor} onClose={() => setShowMemoryEditor(false)} />
+      <AutomationApprovalCenter isOpen={showApprovalCenter} onClose={() => setShowApprovalCenter(false)} />
+      <PluginsSkillsManager isOpen={showPluginsManager} onClose={() => setShowPluginsManager(false)} />
+      <TaskSchedulerModal isOpen={showTaskScheduler} onClose={() => setShowTaskScheduler(false)} />
+      <VoiceSettingsModal isOpen={showVoiceSettings} onClose={() => setShowVoiceSettings(false)} />
     </div>
   );
 }
