@@ -9,6 +9,7 @@ import { appActionTool } from './app-action-tool';
 import { documentQATool } from './document-qa-tool';
 import { reminderTool } from './reminder-tool';
 import { noteTool } from './note-tool';
+import { memoryTool } from './memory-tool';
 
 let registered = false;
 
@@ -26,6 +27,7 @@ export function registerAllTools(): void {
   toolRegistry.register(documentQATool);
   toolRegistry.register(reminderTool);
   toolRegistry.register(noteTool);
+  toolRegistry.register(memoryTool);
 
   registered = true;
 }

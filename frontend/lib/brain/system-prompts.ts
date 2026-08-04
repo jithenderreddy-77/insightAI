@@ -13,8 +13,9 @@ export function buildBrainSystemPrompt(options: {
   contactCount: number;
   timeOfDay: string;
   recentTopics?: string[];
+  memoryContext?: string;
 }): string {
-  const { userName, hasActiveDocuments, contactCount, timeOfDay, recentTopics } = options;
+  const { userName, hasActiveDocuments, contactCount, timeOfDay, recentTopics, memoryContext } = options;
   const toolDescriptions = toolRegistry.generateToolDescriptions();
 
   return `You are **Insight**, an intelligent AI voice assistant — think JARVIS from Iron Man but running in a web browser.
@@ -65,6 +66,8 @@ If you can answer DIRECTLY (general knowledge, math, definitions, greetings, cha
 5. **Match the energy** — if ${userName} is casual ("yo open youtube"), be casual back. If formal, match that.
 6. **Context matters** — if the user says "open it" or "call them", look at conversation history for the referent.
 7. **Always output valid JSON** — never include markdown backticks or extra text.
+8. **Use the memory tool** to remember important facts the user shares and recall them when relevant.
+${memoryContext ? `\n## USER MEMORY & PREFERENCES\n${memoryContext}` : ''}
 ${recentTopics && recentTopics.length > 0 ? `\n## RECENT CONVERSATION TOPICS\n${recentTopics.map(t => `- ${t}`).join('\n')}` : ''}`;
 }
 

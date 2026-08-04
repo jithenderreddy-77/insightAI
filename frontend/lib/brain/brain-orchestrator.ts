@@ -5,6 +5,7 @@
 import { toolRegistry, type ToolResult, type ToolContext, type ClientAction } from './tool-registry';
 import { registerAllTools } from './tools';
 import { buildBrainSystemPrompt, buildSynthesisPrompt, getTimeOfDayContext } from './system-prompts';
+import { buildMemoryContext, remember } from './memory-manager';
 
 // ─────────────────────────────────────────────────────────
 // TYPES
@@ -49,13 +50,17 @@ export async function orchestrate(input: BrainInput): Promise<BrainOutput> {
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const nvidiaApiKey = process.env.NVIDIA_API_KEY;
 
-  // Build dynamic system prompt with tool descriptions
+  // Build memory context for this query
+  const memoryContext = buildMemoryContext(transcript);
+
+  // Build dynamic system prompt with tool descriptions + memory
   const systemPrompt = buildBrainSystemPrompt({
     userName: userName || 'friend',
     hasActiveDocuments,
     contactCount: userContacts.length,
     timeOfDay: getTimeOfDayContext(),
     recentTopics: extractRecentTopics(history),
+    memoryContext,
   });
 
   // Build conversation messages
