@@ -184,31 +184,38 @@ export function VoiceAssistantModal({
     };
   }, [handleDragMove, handleDragEnd]);
 
+  const [pendingLaunchUrl, setPendingLaunchUrl] = useState<{ url: string; label: string } | null>(null);
+
   // --- POPUP-BLOCKER PROOF APPLICATION & URL LAUNCHER ---
-  // Uses direct window location navigation so browsers NEVER trigger "Pop-up window blocked"
-  const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string) => {
-    if (typeof window === 'undefined') return;
+  // Uses direct location redirection and 1-click pre-binding so browsers NEVER trigger "Pop-up window blocked"
+  const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
+    if (typeof window === 'undefined' || !webUrl) return;
+
+    const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
+    setPendingLaunchUrl({ url: webUrl, label });
+
     try {
       if (nativeScheme) {
-        const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (isMobileDevice) {
-          const startTime = Date.now();
-          window.location.href = nativeScheme;
-          setTimeout(() => {
-            if (Date.now() - startTime < 2000) {
-              window.open(webUrl, '_blank', 'noopener,noreferrer');
-            }
-          }, 1500);
-        } else {
-          // Desktop: Open external app/web link in new tab — preserves current chat session!
-          window.open(webUrl, '_blank', 'noopener,noreferrer');
-        }
+        // Trigger native URI scheme (whatsapp://, spotify://, etc.)
+        window.location.href = nativeScheme;
+        // Fallback to web URL after 800ms if native app isn't installed
+        setTimeout(() => {
+          try {
+            window.open(webUrl, '_blank', 'noopener,noreferrer');
+          } catch {
+            window.location.href = webUrl;
+          }
+        }, 800);
       } else {
-        // Open web app in new tab — preserving active chat session context!
-        window.open(webUrl, '_blank', 'noopener,noreferrer');
+        // Try opening in new tab, fallback to direct location redirection if browser blocks popup
+        const win = window.open(webUrl, '_blank', 'noopener,noreferrer');
+        if (!win || win.closed || typeof win.closed === 'undefined') {
+          // Popup was blocked by browser -> Navigate directly in window so action executes 100% deterministically!
+          window.location.href = webUrl;
+        }
       }
-    } catch (err) {
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
+    } catch {
+      window.location.href = webUrl;
     }
   }, []);
 
@@ -1516,6 +1523,38 @@ export function VoiceAssistantModal({
               </p>
             )}
           </div>
+
+          {/* Popup-Blocker Bypass 1-Click Launch Card */}
+          {pendingLaunchUrl && (
+            <div className="w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-950/80 to-indigo-950/80 border border-cyan-500/50 text-left space-y-2 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" /> Web Application Ready
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">1-Click Launch</span>
+              </div>
+              <p className="text-xs text-slate-300">
+                Click below to open <span className="font-semibold text-cyan-200">{pendingLaunchUrl.label}</span> (bypasses browser pop-up blockers):
+              </p>
+              <div className="flex gap-2 pt-0.5">
+                <a
+                  href={pendingLaunchUrl.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setPendingLaunchUrl(null)}
+                  className="flex-1 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold text-center shadow-lg transition-all flex items-center justify-center gap-1.5"
+                >
+                  🚀 Open {pendingLaunchUrl.label} Now
+                </a>
+                <button
+                  onClick={() => setPendingLaunchUrl(null)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-semibold"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Pending Delete Choice Card */}
           {pendingDeleteChoice && (
