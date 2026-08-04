@@ -6,6 +6,7 @@ import { toolRegistry, type ToolResult, type ToolContext, type ClientAction } fr
 import { registerAllTools } from './tools';
 import { buildBrainSystemPrompt, buildSynthesisPrompt, getTimeOfDayContext } from './system-prompts';
 import { buildMemoryContext, remember } from './memory-manager';
+import { buildPlan, executePlan, type TaskPlan } from './task-planner';
 
 // ─────────────────────────────────────────────────────────
 // TYPES
@@ -95,7 +96,59 @@ export async function orchestrate(input: BrainInput): Promise<BrainOutput> {
     decision = fallbackDecision(transcript, hasActiveDocuments);
   }
 
-  // ── STEP 2: TOOL EXECUTION (if the Brain decided to use a tool) ──
+  // ── STEP 2: MULTI-STEP PLAN CHECK ──
+  // For complex requests, try to decompose into a multi-step plan
+  if (decision.toolCall && openaiApiKey) {
+    const toolContext: ToolContext = {
+      userContacts,
+      hasActiveDocuments,
+      userName: userName || 'friend',
+      transcript,
+      openaiApiKey,
+      nvidiaApiKey,
+    };
+
+    // Check if the request is complex enough for multi-step planning
+    const isComplexRequest = detectComplexRequest(transcript);
+    if (isComplexRequest) {
+      try {
+        const plan = await buildPlan(transcript, openaiApiKey, toolContext);
+        if (plan && plan.steps.length >= 2) {
+          // Execute the multi-step plan
+          const { plan: executedPlan, finalResponse, allResults } = await executePlan(
+            plan,
+            toolContext,
+          );
+
+          // Find the last successful tool result for client actions
+          const lastResult = allResults.filter(r => r.success).pop();
+
+          return {
+            spokenResponse: finalResponse,
+            thinking: `Multi-step plan: ${executedPlan.goal} (${executedPlan.steps.length} steps)`,
+            toolUsed: 'multi_step_plan',
+            toolResult: lastResult,
+            clientAction: lastResult?.clientAction,
+            actionType: lastResult ? mapToolToActionType(executedPlan.steps[executedPlan.steps.length - 1].toolName, lastResult) : 'KNOWLEDGE_ANSWER',
+            planSteps: executedPlan.steps.map(s => ({
+              description: s.description,
+              status: s.status,
+              toolName: s.toolName,
+            })),
+            ...(lastResult ? flattenToolResult(
+              executedPlan.steps.filter(s => s.status === 'done').pop()?.toolName || '',
+              lastResult,
+              decision,
+            ) : {}),
+          };
+        }
+      } catch (planErr) {
+        console.error('Multi-step plan error, falling back to single tool:', planErr);
+      }
+    }
+  }
+
+  // ── STEP 3: SINGLE TOOL EXECUTION ──
   if (decision.toolCall) {
     const toolContext: ToolContext = {
       userContacts,
@@ -112,7 +165,7 @@ export async function orchestrate(input: BrainInput): Promise<BrainOutput> {
       toolContext,
     );
 
-    // ── STEP 3: SYNTHESIZE RESPONSE ──
+    // ── STEP 4: SYNTHESIZE RESPONSE ──
     // For web_search, synthesize a spoken answer from search results
     let finalSpoken = decision.spokenResponse;
 
@@ -475,4 +528,34 @@ function fallbackDecision(transcript: string, hasDocs: boolean): LLMToolDecision
     toolCall: null,
     spokenResponse: `I'll answer your question about "${transcript}" right here. Let me think...`,
   };
+}
+
+/**
+ * Detect if a request likely requires multi-step planning.
+ * Looks for conjunctions, sequencing words, and multiple action verbs.
+ */
+function detectComplexRequest(transcript: string): boolean {
+  const q = transcript.toLowerCase();
+
+  // Sequencing conjunctions that indicate multi-step intent
+  const sequencePatterns = [
+    /\band\s+then\b/,
+    /\bthen\s+(open|send|search|email|call|message|save|remind)/,
+    /\bafter\s+that\b/,
+    /\bfirst\b.*\bthen\b/,
+    /\bsearch\b.*\b(and|then)\b.*\b(send|email|message|call)\b/,
+    /\bfind\b.*\b(and|then)\b.*\b(send|email|open|save)\b/,
+    /\blook\s+up\b.*\b(and|then)\b/,
+  ];
+
+  for (const pattern of sequencePatterns) {
+    if (pattern.test(q)) return true;
+  }
+
+  // Count distinct action verbs — if 2+, likely multi-step
+  const actionVerbs = ['search', 'find', 'look up', 'open', 'send', 'email', 'call', 'message', 'save', 'remember', 'remind', 'summarize', 'play'];
+  const verbCount = actionVerbs.filter((v) => q.includes(v)).length;
+  if (verbCount >= 2) return true;
+
+  return false;
 }

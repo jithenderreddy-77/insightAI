@@ -6,6 +6,7 @@ import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
 import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, upsertContact, type Contact } from '@/lib/contacts-store';
 import { resolveContactEntity } from '@/lib/fuzzy-entity-resolution';
+import { generateGreeting, trackUsage, generateSuggestions, type ProactiveInsight } from '@/lib/brain/proactive-engine';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -1034,6 +1035,9 @@ export function VoiceAssistantModal({
       setActionNotice(null);
       setCommandLog((prev) => [...prev.slice(-4), spokenTranscript]);
 
+      // Track usage for proactive habit learning
+      trackUsage(spokenTranscript);
+
       try { recognitionRef.current?.stop(); } catch {}
 
       try {
@@ -1269,7 +1273,7 @@ export function VoiceAssistantModal({
       if (!hasGreetedRef.current) {
         setTimeout(() => {
           const u = getUserFirstName();
-          speakVoiceResponse(`Ready ${u}! Say any command and I'll handle it for you.`);
+          speakVoiceResponse(generateGreeting(u));
         }, 500);
         hasGreetedRef.current = true;
       }
