@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   return createClient(url, key);
 }
@@ -21,7 +21,7 @@ export async function POST(req: Request) {
 
     const supabase = getSupabase();
     if (!supabase) {
-      return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
+      return NextResponse.json({ success: false, error: 'Database not configured. Please check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.' }, { status: 500 });
     }
 
     // ──────────────────────────────────────────────
@@ -34,23 +34,29 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: 'Email and password are required' });
       }
 
+      const cleanEmail = email.trim().toLowerCase();
+
       // Check if account already exists in DB
-      const { data: existing } = await supabase
+      const { data: existing, error: checkError } = await supabase
         .from('user_accounts')
         .select('id, email')
-        .or(`email.eq.${email},username.eq.${email}`)
+        .or(`email.eq.${cleanEmail},username.eq.${cleanEmail}`)
         .limit(1);
 
+      if (checkError) {
+        console.error('Registration DB check error:', checkError);
+      }
+
       if (existing && existing.length > 0) {
-        return NextResponse.json({ success: false, error: 'Account with this Gmail already exists. Please sign in instead.' });
+        return NextResponse.json({ success: false, error: 'Account with this email already exists. Please sign in instead.' });
       }
 
       // Insert new account into Supabase
       const { error } = await supabase.from('user_accounts').upsert({
-        id,
-        username,
-        display_name: displayName,
-        email,
+        id: id || `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
+        username: username || cleanEmail,
+        display_name: displayName || cleanEmail.split('@')[0],
+        email: cleanEmail,
         password_hash: passwordHash,
         avatar: null,
         created_at: createdAt || new Date().toISOString(),
@@ -58,7 +64,7 @@ export async function POST(req: Request) {
 
       if (error) {
         console.error('Registration DB error:', error);
-        return NextResponse.json({ success: false, error: 'Database error during registration' });
+        return NextResponse.json({ success: false, error: error.message || 'Database error during registration' });
       }
 
       return NextResponse.json({ success: true });
@@ -74,11 +80,18 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: 'Email is required' });
       }
 
-      const { data: accounts } = await supabase
+      const cleanEmail = email.trim().toLowerCase();
+
+      const { data: accounts, error: loginError } = await supabase
         .from('user_accounts')
         .select('*')
-        .or(`email.eq.${email},username.eq.${email}`)
+        .or(`email.eq.${cleanEmail},username.eq.${cleanEmail}`)
         .limit(1);
+
+      if (loginError) {
+        console.error('Login DB query error:', loginError);
+        return NextResponse.json({ success: false, error: loginError.message || 'Database query error during login' });
+      }
 
       if (!accounts || accounts.length === 0) {
         return NextResponse.json({ success: false, error: 'Account not found. Please create an account first.' });
@@ -114,12 +127,18 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: 'Gmail is required' });
       }
 
+      const cleanEmail = email.trim().toLowerCase();
+
       // Check if account exists
-      const { data: existing } = await supabase
+      const { data: existing, error: queryError } = await supabase
         .from('user_accounts')
         .select('*')
-        .or(`email.eq.${email},username.eq.${email}`)
+        .or(`email.eq.${cleanEmail},username.eq.${cleanEmail}`)
         .limit(1);
+
+      if (queryError) {
+        console.error('Google auth DB check error:', queryError);
+      }
 
       if (existing && existing.length > 0) {
         // Existing account — return it
@@ -139,11 +158,12 @@ export async function POST(req: Request) {
       }
 
       // New Google account — create it
+      const newId = id || `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
       const { error } = await supabase.from('user_accounts').upsert({
-        id,
-        username: email,
-        display_name: displayName,
-        email,
+        id: newId,
+        username: cleanEmail,
+        display_name: displayName || cleanEmail.split('@')[0],
+        email: cleanEmail,
         password_hash: passwordHash,
         avatar: null,
         created_at: createdAt || new Date().toISOString(),
@@ -151,12 +171,12 @@ export async function POST(req: Request) {
 
       if (error) {
         console.error('Google auth DB error:', error);
-        return NextResponse.json({ success: false, error: 'Database error during Google authentication' });
+        return NextResponse.json({ success: false, error: error.message || 'Database error during Google authentication' });
       }
 
       return NextResponse.json({
         success: true,
-        account: { id, username: email, displayName, email, passwordHash, createdAt },
+        account: { id: newId, username: cleanEmail, displayName, email: cleanEmail, passwordHash, createdAt },
       });
     }
 
@@ -165,12 +185,21 @@ export async function POST(req: Request) {
     // ──────────────────────────────────────────────
     if (action === 'check_account') {
       const { email } = body;
+      if (!email) {
+        return NextResponse.json({ success: false, error: 'Email is required' });
+      }
 
-      const { data: accounts } = await supabase
+      const cleanEmail = email.trim().toLowerCase();
+
+      const { data: accounts, error: dbErr } = await supabase
         .from('user_accounts')
         .select('*')
-        .or(`email.eq.${email},username.eq.${email}`)
+        .or(`email.eq.${cleanEmail},username.eq.${cleanEmail}`)
         .limit(1);
+
+      if (dbErr) {
+        return NextResponse.json({ success: false, error: dbErr.message });
+      }
 
       if (accounts && accounts.length > 0) {
         const found = accounts[0];
@@ -198,18 +227,22 @@ export async function POST(req: Request) {
     if (action === 'save_thread') {
       const { userId, thread } = body;
 
+      if (!userId || !thread || !thread.id) {
+        return NextResponse.json({ success: false, error: 'userId and thread details are required' });
+      }
+
       const { error } = await supabase.from('user_chats').upsert({
         id: thread.id,
         user_id: userId,
-        title: thread.title,
-        messages: thread.messages,
+        title: thread.title || 'Untitled Chat',
+        messages: thread.messages || [],
         file_names: thread.fileNames || [],
         created_at: thread.createdAt || new Date().toISOString(),
         updated_at: thread.updatedAt || new Date().toISOString(),
       });
 
       if (error) console.error('Thread save DB error:', error);
-      return NextResponse.json({ success: !error });
+      return NextResponse.json({ success: !error, error: error ? error.message : undefined });
     }
 
     // ──────────────────────────────────────────────
@@ -218,11 +251,20 @@ export async function POST(req: Request) {
     if (action === 'get_threads') {
       const { userId } = body;
 
-      const { data: threads } = await supabase
+      if (!userId) {
+        return NextResponse.json({ success: false, error: 'userId is required' });
+      }
+
+      const { data: threads, error: getErr } = await supabase
         .from('user_chats')
         .select('*')
         .eq('user_id', userId)
         .order('updated_at', { ascending: false });
+
+      if (getErr) {
+        console.error('Get threads DB error:', getErr);
+        return NextResponse.json({ success: false, error: getErr.message, threads: [] });
+      }
 
       const mapped = (threads || []).map((t: any) => ({
         id: t.id,
@@ -240,12 +282,13 @@ export async function POST(req: Request) {
     // ACTION: GET_ALL_ADMIN — Get all accounts + chats for Admin Portal
     // ──────────────────────────────────────────────
     if (action === 'get_all_admin') {
-      const { data: dbAccounts } = await supabase.from('user_accounts').select('*').order('created_at', { ascending: false });
-      const { data: dbChats } = await supabase.from('user_chats').select('*').order('updated_at', { ascending: false });
+      const { data: dbAccounts, error: accErr } = await supabase.from('user_accounts').select('*').order('created_at', { ascending: false });
+      const { data: dbChats, error: chatErr } = await supabase.from('user_chats').select('*').order('updated_at', { ascending: false });
       return NextResponse.json({
         success: true,
         accounts: dbAccounts || [],
         chats: dbChats || [],
+        errors: accErr || chatErr ? { accounts: accErr?.message, chats: chatErr?.message } : undefined,
       });
     }
 
@@ -254,8 +297,11 @@ export async function POST(req: Request) {
     // ──────────────────────────────────────────────
     if (action === 'delete_thread') {
       const { threadId } = body;
+      if (!threadId) {
+        return NextResponse.json({ success: false, error: 'threadId is required' });
+      }
       const { error } = await supabase.from('user_chats').delete().eq('id', threadId);
-      return NextResponse.json({ success: !error });
+      return NextResponse.json({ success: !error, error: error ? error.message : undefined });
     }
 
     return NextResponse.json({ success: false, error: 'Unknown action' });
@@ -264,3 +310,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Server error', details: error.message }, { status: 500 });
   }
 }
+
