@@ -186,36 +186,34 @@ export function VoiceAssistantModal({
 
   const [pendingLaunchUrl, setPendingLaunchUrl] = useState<{ url: string; label: string } | null>(null);
 
-  // --- POPUP-BLOCKER PROOF APPLICATION & URL LAUNCHER ---
-  // Uses direct location redirection and 1-click pre-binding so browsers NEVER trigger "Pop-up window blocked"
+  // --- NATIVE APP LAUNCHER & NEW TAB WEB FALLBACK (NEVER REPLACES INSIGHT TAB) ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
     if (typeof window === 'undefined' || !webUrl) return;
 
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
     setPendingLaunchUrl({ url: webUrl, label });
 
-    try {
-      if (nativeScheme) {
-        // Trigger native URI scheme (whatsapp://, spotify://, etc.)
-        window.location.href = nativeScheme;
-        // Fallback to web URL after 800ms if native app isn't installed
+    // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, vscode://, etc.)
+    if (nativeScheme) {
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = nativeScheme;
+        document.body.appendChild(iframe);
         setTimeout(() => {
-          try {
-            window.open(webUrl, '_blank', 'noopener,noreferrer');
-          } catch {
-            window.location.href = webUrl;
-          }
-        }, 800);
-      } else {
-        // Try opening in new tab, fallback to direct location redirection if browser blocks popup
-        const win = window.open(webUrl, '_blank', 'noopener,noreferrer');
-        if (!win || win.closed || typeof win.closed === 'undefined') {
-          // Popup was blocked by browser -> Navigate directly in window so action executes 100% deterministically!
-          window.location.href = webUrl;
-        }
+          try { if (document.body.contains(iframe)) document.body.removeChild(iframe); } catch {}
+        }, 2000);
+      } catch {
+        // Fallback protocol trigger
+        try { window.location.href = nativeScheme; } catch {}
       }
+    }
+
+    // 2. Open in NEW TAB ONLY (_blank) — NEVER overwrite active Insight working tab!
+    try {
+      window.open(webUrl, '_blank', 'noopener,noreferrer');
     } catch {
-      window.location.href = webUrl;
+      // If browser popup blocker intercepts, the 1-Click Launch Card in UI allows opening in a new tab!
     }
   }, []);
 
