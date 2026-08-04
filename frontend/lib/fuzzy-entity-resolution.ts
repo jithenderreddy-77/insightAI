@@ -185,6 +185,30 @@ export interface ContactResolutionResult {
  * HARD CONSTRAINT: Only returns contacts from the actual source list.
  * resolvedContact is ALWAYS a reference to an object from availableContacts.
  */
+/**
+ * Generate normalized entity query variants (e.g. "Mummy 2" -> ["mummy 2", "mummy two", "mummy2", "mummy-2"])
+ */
+export function generateEntityVariants(query: string): string[] {
+  const clean = query.trim().toLowerCase();
+  const variants = new Set<string>([clean]);
+
+  const numberWords: Record<string, string> = {
+    '1': 'one', '2': 'two', '3': 'three', '4': 'four', '5': 'five',
+    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+  };
+
+  for (const [k, v] of Object.entries(numberWords)) {
+    if (clean.includes(k)) {
+      variants.add(clean.replace(new RegExp(`\\b${k}\\b`, 'g'), v));
+    }
+  }
+
+  variants.add(clean.replace(/\s+/g, ''));
+  variants.add(clean.replace(/\s+/g, '-'));
+
+  return Array.from(variants);
+}
+
 export function resolveContactEntity(rawNameQuery: string, availableContacts?: Contact[]): ContactResolutionResult {
   const contacts = availableContacts || getSavedContacts();
   const searchedName = rawNameQuery.trim();
@@ -193,6 +217,7 @@ export function resolveContactEntity(rawNameQuery: string, availableContacts?: C
     return { status: 'NOT_FOUND', confidence: 0, searchedName };
   }
 
+  const queryVariants = generateEntityVariants(searchedName);
   const queryLower = searchedName.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
   const queryWords = queryLower.split(/\s+/).filter(w => w.length > 0);
   const queryMetaphones = queryWords.map(w => metaphone(w));
@@ -234,9 +259,9 @@ export function resolveContactEntity(rawNameQuery: string, availableContacts?: C
       }
     }
 
-    // ── PASS 1: Exact full-name match ──
-    if (nameLower === queryLower) {
-      score = 100; reason = 'Exact full match';
+    // ── PASS 1: Exact full-name match or multi-variant match ("Mummy 2" -> "mummy two") ──
+    if (nameLower === queryLower || queryVariants.some(v => v === nameLower)) {
+      score = 100; reason = 'Exact full/variant match';
     }
     // ── PASS 2: Full-name prefix/contains ──
     else if (nameLower.startsWith(queryLower) || queryLower.startsWith(nameLower)) {

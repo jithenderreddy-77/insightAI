@@ -93,6 +93,7 @@ export function VoiceAssistantModal({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [recognitionAvailable, setRecognitionAvailable] = useState(true);
   const [commandLog, setCommandLog] = useState<string[]>([]);
+  const [pendingDeleteChoice, setPendingDeleteChoice] = useState<{ chatName?: string } | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
 
   // New UI Modal & Panel States
@@ -1038,6 +1039,15 @@ export function VoiceAssistantModal({
         return true;
       }
 
+      // Delete message option detection ("Delete for me" vs "Delete for everyone")
+      if (q.includes('delete') && (q.includes('last message') || q.includes('my message') || q.includes('this message'))) {
+        setPendingDeleteChoice({ chatName: 'WhatsApp' });
+        speakVoiceResponse('Do you want to delete this message for yourself only or for everyone in the chat?');
+        setActionNotice('❓ Select delete option');
+        isProcessingRef.current = false;
+        return true;
+      }
+
       // --- INSTANT MATH / CALCULATOR (0 tokens, evaluated locally) ---
       const mathPatterns = [
         /^(?:what(?:'s| is)\s+)?(\d[\d\s+\-*/().^%]+\d)\s*(?:\?|$)/i,
@@ -1506,6 +1516,41 @@ export function VoiceAssistantModal({
               </p>
             )}
           </div>
+
+          {/* Pending Delete Choice Card */}
+          {pendingDeleteChoice && (
+            <div className="w-full p-3.5 rounded-2xl bg-slate-900/95 border border-rose-500/50 text-left space-y-3 animate-in fade-in zoom-in duration-200">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <span className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
+                  <X className="w-4 h-4 text-rose-400" /> Delete Message Options
+                </span>
+                <span className="text-[10px] text-slate-400">Select option</span>
+              </div>
+              <p className="text-xs text-slate-300">Do you want to delete this message for yourself only or for everyone in the chat?</p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    setPendingDeleteChoice(null);
+                    setActionNotice('🗑️ Deleted for me');
+                    speakVoiceResponse('Message deleted for you.');
+                  }}
+                  className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold transition-all"
+                >
+                  Delete For Me
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingDeleteChoice(null);
+                    setActionNotice('🗑️ Deleted for everyone');
+                    speakVoiceResponse('Message deleted for everyone in the chat.');
+                  }}
+                  className="flex-1 py-1.5 rounded-xl bg-rose-600/40 hover:bg-rose-600/60 border border-rose-500/50 text-rose-300 text-xs font-bold transition-all"
+                >
+                  Delete For Everyone
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Pending Confirmation Card (yes/no before executing) */}
           {pendingConfirmContact && (
