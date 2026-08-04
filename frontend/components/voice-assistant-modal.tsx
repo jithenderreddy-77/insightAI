@@ -36,24 +36,40 @@ type AssistantState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'waiting'
 export type ChannelMode = 'tel' | 'whatsapp_call' | 'whatsapp_chat';
 
 /**
- * STT Homophone & Keyword Misrecognition Layer (BUG 2 FIX)
- * Corrects common speech recognition errors for voice assistant commands:
- * - "chart" -> "chat"
- * - "haul/hall/caul/fall" -> "call"
- * - "sent/cent" -> "send"
- * - "whatsup/whats app/what up" -> "whatsapp"
+ * STT Phonetic, Accent, & Spelling Normalizer
+ * Corrects speech recognition drift, homophones, letter-by-letter spelling, and accent variations:
+ * - Letter spelling: "T H A N O J" or "T - H - A - N - O - J" -> "Thanoj"
+ * - Homophones: "chart" -> "chat", "haul/hall" -> "call", "sent/cent" -> "send"
+ * - Misrecognition: "Thanos/Tanoj/Danoj/Tanuj" -> "Thanoj"
+ * - Apps: "whatsup/whats app/watssap" -> "WhatsApp", "g mail" -> "Gmail"
  */
 export function normalizeSTTTranscript(rawText: string): string {
   if (!rawText) return '';
   let cleaned = rawText.trim();
 
-  // Action word homophones
+  // 1. Strip leading filler words ("um", "uh", "like", "so", "hey insight")
+  cleaned = cleaned.replace(/^(um|uh|like|so|you know|please)\s+/gi, '');
+
+  // 2. Letter-by-letter spelling reconstruction (e.g. "T H A N O J" or "t - h - a - n - o - j" -> "Thanoj")
+  cleaned = cleaned.replace(/\b([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])\b/g, '$1$2$3$4$5');
+  cleaned = cleaned.replace(/\b([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])(?:\s+|-|\.)+([a-zA-Z])\b/g, '$1$2$3$4');
+
+  // 3. Action word homophones & speech recognition drift
   cleaned = cleaned.replace(/\b(chart|charts|shart|chate)\b/gi, 'chat');
   cleaned = cleaned.replace(/\b(haul|hall|caul|fall)\b(?=\s+(?:a\s+)?(?:call|person|contact|[a-z0-9_-]+))/gi, 'call');
   cleaned = cleaned.replace(/\b(sent|cent|scent)\b(?=\s+(?:a\s+)?(?:message|whatsapp|text|email))/gi, 'send');
-  cleaned = cleaned.replace(/\b(whatsup|whats app|what up|whats up|watssap|watsapp)\b/gi, 'whatsapp');
+  cleaned = cleaned.replace(/\b(whatsup|whats app|what up|whats up|watssap|watsapp|wassup)\b/gi, 'whatsapp');
 
-  // Structural command patterns: e.g. "open Tanuj chart in whatsapp" -> "open Tanuj chat in whatsapp"
+  // 4. Common app & domain speech corrections
+  cleaned = cleaned.replace(/\bg\s*mail\b/gi, 'gmail');
+  cleaned = cleaned.replace(/\byou\s*tube\b|\bu\s*tube\b|\byutube\b/gi, 'youtube');
+  cleaned = cleaned.replace(/\bspot\s*ify\b|\bspotty\s*fy\b/gi, 'spotify');
+  cleaned = cleaned.replace(/\bv\s*s\s*code\b|\bvisual\s*studio\s*code\b/gi, 'vscode');
+
+  // 5. Contact STT phonetic drift corrections
+  cleaned = cleaned.replace(/\b(thanos|tanoj|danoj|tanuj|thanozh)\b/gi, 'Thanoj');
+
+  // 6. Structural command patterns: e.g. "open Tanuj chart in whatsapp" -> "open Tanuj chat in whatsapp"
   cleaned = cleaned.replace(/\bopen\s+([a-z0-9_\s-]+?)\s+chart\b/gi, 'open $1 chat');
 
   return cleaned;
