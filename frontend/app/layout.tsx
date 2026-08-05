@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import { GeistSans } from "geist/font/sans"
 import { Toaster } from "@/components/ui/toaster"
+import { PWAInstallManager } from "@/components/pwa-install-manager"
 
 import "./globals.css"
 
@@ -41,6 +42,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
       <body className={GeistSans.className}>
+        <PWAInstallManager />
         {children}
         <Toaster />
       </body>

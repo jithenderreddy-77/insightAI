@@ -60,25 +60,22 @@ export function InstallAppModal({
           </div>
         </div>
 
-        {/* Primary 1-Click Install Button (When browser supports beforeinstallprompt) */}
-        {deferredPrompt ? (
-          <div className="p-4 rounded-2xl bg-indigo-950/60 border border-indigo-500/50 flex flex-col items-center gap-3 text-center">
-            <div className="flex items-center gap-2 text-indigo-200 font-extrabold text-sm">
-              <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
-              <span>1-Click Native App Installation Ready!</span>
-            </div>
-            <Button
-              onClick={() => {
-                onInstall();
-                onClose();
-              }}
-              className="w-full py-6 rounded-2xl bg-gradient-to-r from-indigo-500 via-cyan-500 to-teal-400 hover:from-indigo-600 hover:to-teal-500 text-white font-extrabold text-sm shadow-xl transition-all duration-300 hover:scale-[1.02] flex items-center justify-center gap-2"
-            >
-              <Download className="w-5 h-5" />
-              <span>Install Insight AI App Now ({os.toUpperCase()})</span>
-            </Button>
+        {/* Primary 1-Click Install Button (Always visible on Desktop & Mobile) */}
+        <div className="p-4 rounded-2xl bg-indigo-950/60 border border-indigo-500/50 flex flex-col items-center gap-3 text-center">
+          <div className="flex items-center gap-2 text-indigo-200 font-extrabold text-sm">
+            <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
+            <span>1-Click App Installation ({os.toUpperCase()})</span>
           </div>
-        ) : null}
+          <Button
+            onClick={() => {
+              onInstall();
+            }}
+            className="w-full py-6 rounded-2xl bg-gradient-to-r from-indigo-500 via-cyan-500 to-teal-400 hover:from-indigo-600 hover:to-teal-500 text-white font-extrabold text-sm shadow-xl transition-all duration-300 hover:scale-[1.02] flex items-center justify-center gap-2"
+          >
+            <Download className="w-5 h-5 animate-bounce" />
+            <span>Install Insight AI App Now ({os.toUpperCase()})</span>
+          </Button>
+        </div>
 
         {/* Platform Selection & Instructions */}
         <div className="space-y-3">
