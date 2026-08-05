@@ -48,7 +48,7 @@ export function PWAInstallManager() {
     };
   }, []);
 
-  const handleInstallClick = async () => {
+  const handleInstallClick = async (): Promise<boolean> => {
     if (deferredPrompt) {
       try {
         deferredPrompt.prompt();
@@ -61,7 +61,9 @@ export function PWAInstallManager() {
         console.warn('Install prompt error:', err);
       }
       setDeferredPrompt(null);
+      return true;
     }
+    return false;
   };
 
   const handleCloseModal = () => {

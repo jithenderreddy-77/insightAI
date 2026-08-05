@@ -9,7 +9,7 @@ interface InstallAppModalProps {
   isOpen: boolean;
   onClose: () => void;
   deferredPrompt: any;
-  onInstall: () => void;
+  onInstall: () => boolean | Promise<boolean>;
 }
 
 export function InstallAppModal({
@@ -19,6 +19,7 @@ export function InstallAppModal({
   onInstall,
 }: InstallAppModalProps) {
   const [os, setOs] = useState<'android' | 'ios' | 'mac' | 'windows' | 'linux' | 'other'>('windows');
+  const [showGuideNotice, setShowGuideNotice] = useState<boolean>(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -29,6 +30,15 @@ export function InstallAppModal({
     else if (/win/i.test(ua)) setOs('windows');
     else if (/linux/i.test(ua)) setOs('linux');
   }, []);
+
+  const handleInstallButtonClick = async () => {
+    const prompted = await onInstall();
+    if (prompted) {
+      onClose();
+    } else {
+      setShowGuideNotice(true);
+    }
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -67,14 +77,18 @@ export function InstallAppModal({
             <span>1-Click App Installation ({os.toUpperCase()})</span>
           </div>
           <Button
-            onClick={() => {
-              onInstall();
-            }}
+            onClick={handleInstallButtonClick}
             className="w-full py-6 rounded-2xl bg-gradient-to-r from-indigo-500 via-cyan-500 to-teal-400 hover:from-indigo-600 hover:to-teal-500 text-white font-extrabold text-sm shadow-xl transition-all duration-300 hover:scale-[1.02] flex items-center justify-center gap-2"
           >
             <Download className="w-5 h-5 animate-bounce" />
             <span>Install Insight AI App Now ({os.toUpperCase()})</span>
           </Button>
+
+          {showGuideNotice && (
+            <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold text-center animate-pulse">
+              👇 Follow the {os.toUpperCase()} installation steps below to complete setup!
+            </div>
+          )}
         </div>
 
         {/* Platform Selection & Instructions */}
