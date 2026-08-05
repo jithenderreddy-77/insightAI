@@ -16,10 +16,23 @@ export interface UserAccount extends UserProfile {
   createdAt: string;
 }
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  url: string;
+  storagePath?: string;
+  mimeType: string;
+  fileExtension?: string;
+  sizeBytes?: number;
+  createdAt?: string;
+}
+
 export interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   sources?: any[];
+  attachments?: ChatAttachment[];
+  timestamp?: string;
 }
 
 export interface ChatThread {

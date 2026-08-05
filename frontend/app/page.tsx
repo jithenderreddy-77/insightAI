@@ -37,6 +37,7 @@ import { PWAUpdateToast } from '@/components/pwa-update-toast';
 import {
   UserProfile,
   ChatThread,
+  ChatAttachment,
   getSavedUser,
   removeUser,
   getUserThreads,
@@ -93,6 +94,7 @@ export default function Home() {
       role: 'user' | 'assistant';
       content: string;
       sources?: PDFDocument[];
+      attachments?: ChatAttachment[];
     }>
   >([]);
   const [input, setInput] = useState('');
@@ -107,6 +109,9 @@ export default function Home() {
   const prefetchCacheRef = useRef<{ draftQuery: string; candidateDocs: any[]; timestamp: number } | null>(null);
   const prefetchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prefetchAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Persistent Attachments Ref
+  const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -467,9 +472,12 @@ export default function Home() {
     }
 
     const userMessage = input.trim();
+    const currentAttachments = [...pendingAttachmentsRef.current];
+    pendingAttachmentsRef.current = [];
+
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: userMessage, sources: undefined },
+      { role: 'user', content: userMessage, sources: undefined, attachments: currentAttachments.length > 0 ? currentAttachments : undefined },
       { role: 'assistant', content: '', sources: undefined },
     ]);
     setInput('');
@@ -872,6 +880,28 @@ export default function Home() {
             setSpreadsheetSessions((prev) => ({ ...prev, ...data.spreadsheetData }));
           }
           successfulFiles.push(file);
+
+          // Upload binary and metadata to Supabase Storage & DB
+          try {
+            const attFormData = new FormData();
+            attFormData.append('file', file);
+            attFormData.append('conversationId', threadId || 'default');
+            attFormData.append('userId', user?.id || 'anonymous');
+
+            const attRes = await fetch('/api/attachments/upload', {
+              method: 'POST',
+              body: attFormData,
+            });
+
+            if (attRes.ok) {
+              const attData = await attRes.json();
+              if (attData.success && attData.attachment) {
+                pendingAttachmentsRef.current.push(attData.attachment);
+              }
+            }
+          } catch (attErr) {
+            console.warn('[Attachment Persistence Notice]', attErr);
+          }
         } catch (fileError) {
           console.error(`Error uploading ${file.name}:`, fileError);
           toast({

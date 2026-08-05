@@ -3,12 +3,13 @@
 import React, { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, Check, FileText, User } from 'lucide-react';
+import { Copy, Check, FileText, User, Download, ExternalLink, Image as ImageIcon, Music, Video, FileSpreadsheet, Archive, File } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PDFDocument } from '@/types/graphTypes';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
 import { DataChart } from '@/components/data-chart';
+import { ChatAttachment } from '@/lib/history-store';
 import {
   Accordion,
   AccordionContent,
@@ -21,6 +22,7 @@ interface ChatMessageProps {
     role: 'user' | 'assistant';
     content: string;
     sources?: PDFDocument[];
+    attachments?: ChatAttachment[];
   };
 }
 
@@ -137,6 +139,70 @@ export function ChatMessage({ message }: ChatMessageProps) {
           </div>
         ) : (
           <>
+            {/* Render persistent uploaded attachments */}
+            {message.attachments && message.attachments.length > 0 && (
+              <div className="flex flex-col gap-2 mb-2">
+                {message.attachments.map((att, idx) => {
+                  const isImg = (att.mimeType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(att.name);
+                  const isAud = (att.mimeType || '').startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(att.name);
+                  const isVid = (att.mimeType || '').startsWith('video/') || /\.(mp4|webm|mov)$/i.test(att.name);
+
+                  if (isImg && att.url) {
+                    return (
+                      <div key={att.id || idx} className="rounded-xl overflow-hidden border border-white/20 dark:border-slate-700/50 shadow-sm max-w-xs">
+                        <img src={att.url} alt={att.name} className="w-full h-auto max-h-56 object-cover" />
+                        <div className="p-1.5 bg-slate-900/70 backdrop-blur-sm text-white text-[11px] flex justify-between items-center px-2.5">
+                          <span className="truncate max-w-[180px]">{att.name}</span>
+                          <a href={att.url} target="_blank" rel="noopener noreferrer" download={att.name} className="hover:text-indigo-300 transition-colors">
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (isAud && att.url) {
+                    return (
+                      <div key={att.id || idx} className="p-2 rounded-xl bg-slate-900/40 border border-slate-700/50 w-full max-w-xs">
+                        <p className="text-xs font-medium mb-1 truncate text-slate-100">{att.name}</p>
+                        <audio controls src={att.url} className="w-full h-8" />
+                      </div>
+                    );
+                  }
+
+                  if (isVid && att.url) {
+                    return (
+                      <div key={att.id || idx} className="rounded-xl overflow-hidden border border-slate-700/50 max-w-xs">
+                        <video controls src={att.url} className="w-full max-h-52" />
+                        <p className="text-[11px] p-1.5 bg-slate-900/70 text-white truncate px-2">{att.name}</p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <a
+                      key={att.id || idx}
+                      href={att.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={att.name}
+                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-medium transition-all duration-200 hover:scale-[1.01] ${
+                        isUser
+                          ? 'bg-white/10 border-white/20 text-white hover:bg-white/20'
+                          : 'bg-indigo-50/70 border-indigo-100 text-indigo-900 dark:bg-slate-800/70 dark:border-slate-700 dark:text-indigo-200 hover:bg-indigo-100/70'
+                      }`}
+                    >
+                      <FileText className="w-4 h-4 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate font-semibold">{att.name}</p>
+                        {att.sizeBytes && <p className="text-[10px] opacity-70">{(att.sizeBytes / 1024).toFixed(1)} KB</p>}
+                      </div>
+                      <Download className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                    </a>
+                  );
+                })}
+              </div>
+            )}
             {isUser ? (
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
             ) : (

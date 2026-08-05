@@ -279,16 +279,45 @@ export async function POST(req: Request) {
     }
 
     // ──────────────────────────────────────────────
-    // ACTION: GET_ALL_ADMIN — Get all accounts + chats for Admin Portal
+    // ACTION: GET_ALL_ADMIN — Get all accounts + chats + attachments for Admin Portal
     // ──────────────────────────────────────────────
     if (action === 'get_all_admin') {
       const { data: dbAccounts, error: accErr } = await supabase.from('user_accounts').select('*').order('created_at', { ascending: false });
       const { data: dbChats, error: chatErr } = await supabase.from('user_chats').select('*').order('updated_at', { ascending: false });
+      
+      let dbAttachments: any[] = [];
+      try {
+        const { data: attData } = await supabase.from('chat_attachments').select('*').eq('deleted', false).order('created_at', { ascending: false });
+        if (attData) dbAttachments = attData;
+      } catch {}
+
       return NextResponse.json({
         success: true,
         accounts: dbAccounts || [],
         chats: dbChats || [],
+        attachments: dbAttachments,
         errors: accErr || chatErr ? { accounts: accErr?.message, chats: chatErr?.message } : undefined,
+      });
+    }
+
+    // ──────────────────────────────────────────────
+    // ACTION: GET_ATTACHMENTS — Fetch attachments for a conversation
+    // ──────────────────────────────────────────────
+    if (action === 'get_attachments') {
+      const { conversationId, userId } = body;
+      let query = supabase.from('chat_attachments').select('*').eq('deleted', false);
+      
+      if (conversationId) {
+        query = query.eq('conversation_id', conversationId);
+      } else if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data: attachments, error: attErr } = await query.order('created_at', { ascending: true });
+      return NextResponse.json({
+        success: !attErr,
+        attachments: attachments || [],
+        error: attErr ? attErr.message : undefined,
       });
     }
 
@@ -301,6 +330,11 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: 'threadId is required' });
       }
       const { error } = await supabase.from('user_chats').delete().eq('id', threadId);
+      // Soft-delete linked attachments
+      try {
+        await supabase.from('chat_attachments').update({ deleted: true }).eq('conversation_id', threadId);
+      } catch {}
+
       return NextResponse.json({ success: !error, error: error ? error.message : undefined });
     }
 
