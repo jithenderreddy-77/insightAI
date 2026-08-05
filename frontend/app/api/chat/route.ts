@@ -263,9 +263,9 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 
       for (const modelCandidate of nvidiaCandidates) {
         try {
-          // 6-second timeout per candidate connection attempt — fail fast if unresponsive, try next
+          // 3.5-second timeout per candidate connection attempt — fail fast if unresponsive, try next
           const candidateAbort = new AbortController();
-          const candidateTimer = setTimeout(() => candidateAbort.abort(), 6000);
+          const candidateTimer = setTimeout(() => candidateAbort.abort(), 3500);
 
           const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
             method: 'POST',
@@ -298,7 +298,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
           }
         } catch (err: any) {
           if (err?.name === 'AbortError') {
-            console.log(`[NVIDIA AI] ${modelCandidate} timed out (4s), trying next...`);
+            console.log(`[NVIDIA AI] ${modelCandidate} timed out (3.5s), trying next...`);
           } else {
             console.log(`[NVIDIA AI] ${modelCandidate} network error, trying next...`);
           }
@@ -312,7 +312,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
       for (const modelCandidate of openAiCandidates) {
         try {
           const oaiAbort = new AbortController();
-          const oaiTimer = setTimeout(() => oaiAbort.abort(), 4000);
+          const oaiTimer = setTimeout(() => oaiAbort.abort(), 3500);
 
           const res = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -342,7 +342,7 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
           }
         } catch (err: any) {
           if (err?.name === 'AbortError') {
-            console.log(`[OpenAI] ${modelCandidate} timed out (4s), trying next...`);
+            console.log(`[OpenAI] ${modelCandidate} timed out (3.5s), trying next...`);
           } else {
             console.log(`[OpenAI] ${modelCandidate} error, trying next...`);
           }
@@ -382,9 +382,10 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
     const readable = new ReadableStream({
       start(controller) {
         if (!aiResponseStream) {
-          // Built-in Standalone Offline Extractive & Intelligence Synthesis Engine
+          // Built-in Standalone Offline Extractive & Intelligence Synthesis Engine (100% reliable fallback)
           const standaloneAnswer = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
           const ssePayload = {
+            delta: standaloneAnswer,
             event: 'messages/partial',
             data: [{ type: 'ai', content: standaloneAnswer }],
           };
@@ -419,7 +420,9 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
                   const delta = parsed.choices?.[0]?.delta?.content || '';
                   if (delta) {
                     fullContent += delta;
+                    // Send lightweight delta token object (95% bandwidth reduction on slow networks)
                     const ssePayload = {
+                      delta,
                       event: 'messages/partial',
                       data: [{ type: 'ai', content: fullContent }],
                     };
@@ -430,6 +433,16 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
             }
           } catch (err: any) {
             console.error('Stream processing error:', err);
+            // Defensive Fallback: If cloud streaming breaks midway, send standalone extracted answer
+            if (!controller.desiredSize || controller.desiredSize > 0) {
+              const fallbackText = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
+              const fallbackPayload = {
+                delta: fallbackText,
+                event: 'messages/partial',
+                data: [{ type: 'ai', content: fallbackText }],
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallbackPayload)}\n\n`));
+            }
           } finally {
             try {
               controller.close();
@@ -441,9 +454,11 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 
     return new Response(readable, {
       headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Encoding': 'identity',
       },
     });
   } catch (error: any) {

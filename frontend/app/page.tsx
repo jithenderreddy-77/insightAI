@@ -644,9 +644,18 @@ export default function Home() {
               continue;
             }
 
-            const { event, data } = sseEvent;
+            const { delta, event, data } = sseEvent;
 
-            if (event === 'messages/partial') {
+            if (delta && typeof delta === 'string') {
+              setMessages((prev) => {
+                const newArr = [...prev];
+                if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+                  newArr[newArr.length - 1].content += delta;
+                  newArr[newArr.length - 1].sources = lastRetrievedDocsRef.current;
+                }
+                return newArr;
+              });
+            } else if (event === 'messages/partial') {
               if (Array.isArray(data)) {
                 const lastObj = data[data.length - 1];
                 if (lastObj?.type === 'ai') {
