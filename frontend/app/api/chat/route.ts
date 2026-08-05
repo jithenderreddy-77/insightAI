@@ -6,7 +6,7 @@ import { performWebSearch } from '@/lib/web-search';
 
 export async function POST(req: Request) {
   try {
-    const { message, threadId, fileNames, useLocalOffline, offlineDocuments } = await req.json();
+    const { message, threadId, fileNames, useLocalOffline, offlineDocuments, prefetchedDocs } = await req.json();
 
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -24,35 +24,45 @@ export async function POST(req: Request) {
       .split(/\s+/)
       .filter((w: string) => w.length > 2);
 
-    // --- FAST EXECUTION: Query Embedding (400ms hard timeout) + Parallel Supabase / Offline retrieval ---
-    const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
-
-    let filenameDocs: any[] = [];
-    const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
+    let allCandidateDocs: any[] = [];
+    let queryEmbedding: number[] = [];
     const hasOfflineDocs = offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0;
 
-    // If offlineDocuments are present in session, skip slow Supabase network call entirely!
-    const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline)
-      ? (async () => {
-          try {
-            const client = createClient(supabaseUrl, supabaseKey);
-            const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
-            // Fast select without heavy embedding column
-            const { data, error } = await client.from('documents').select('id, content, metadata');
-            if (!error && data && data.length > 0) {
-              filenameDocs = data.filter((d: any) => {
-                const fn = (d.metadata?.filename || d.metadata?.source || '').toLowerCase();
-                return activeFileNames.some((af: string) => fn.includes(af) || af.includes(fn));
-              });
-            }
-          } catch {}
-        })()
-      : Promise.resolve();
+    // FAST-PATH: Use Speculatively Pre-fetched Document Chunks if available (0ms retrieval latency!)
+    const hasValidPrefetched = Array.isArray(prefetchedDocs) && prefetchedDocs.length > 0;
+    if (hasValidPrefetched) {
+      allCandidateDocs = prefetchedDocs;
+    } else {
+      // --- REGULAR EXECUTION: Query Embedding (400ms hard timeout) + Parallel Supabase / Offline retrieval ---
+      const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
 
-    // Wait for embedding (max 400ms) + filename retrieval
-    const [queryEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
+      let filenameDocs: any[] = [];
+      const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
 
-    let allCandidateDocs: any[] = [...filenameDocs];
+      // If offlineDocuments are present in session, skip slow Supabase network call entirely!
+      const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline)
+        ? (async () => {
+            try {
+              const client = createClient(supabaseUrl, supabaseKey);
+              const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
+              // Fast select without heavy embedding column
+              const { data, error } = await client.from('documents').select('id, content, metadata');
+              if (!error && data && data.length > 0) {
+                filenameDocs = data.filter((d: any) => {
+                  const fn = (d.metadata?.filename || d.metadata?.source || '').toLowerCase();
+                  return activeFileNames.some((af: string) => fn.includes(af) || af.includes(fn));
+                });
+              }
+            } catch {}
+          })()
+        : Promise.resolve();
+
+      // Wait for embedding (max 400ms) + filename retrieval
+      const [fetchedEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
+      queryEmbedding = fetchedEmbedding;
+
+      allCandidateDocs = [...filenameDocs];
+    }
 
     // If no cloud filename matches found and no offline docs, try Supabase vector search with 500ms timeout
     if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {

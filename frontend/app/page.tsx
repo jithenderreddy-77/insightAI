@@ -102,11 +102,81 @@ export default function Home() {
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
+  // Speculative Pre-fetching State & Refs
+  const [isPrefetched, setIsPrefetched] = useState(false);
+  const prefetchCacheRef = useRef<{ draftQuery: string; candidateDocs: any[]; timestamp: number } | null>(null);
+  const prefetchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const prefetchAbortControllerRef = useRef<AbortController | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastRetrievedDocsRef = useRef<PDFDocument[]>([]);
   const chatInputRef = useRef<HTMLInputElement>(null);
+
+  // Debounced input handler for speculative pre-fetching (cancels stale requests, respects word thresholds)
+  const handleInputChangeWithPrefetch = (val: string) => {
+    setInput(val);
+    setIsPrefetched(false);
+
+    if (prefetchTimerRef.current) {
+      clearTimeout(prefetchTimerRef.current);
+    }
+
+    if (prefetchAbortControllerRef.current) {
+      prefetchAbortControllerRef.current.abort();
+      prefetchAbortControllerRef.current = null;
+    }
+
+    const trimmed = val.trim();
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+
+    // Threshold Gate: minimum 10 characters and 2 words
+    if (trimmed.length < 10 || wordCount < 2 || isLoading) {
+      prefetchCacheRef.current = null;
+      return;
+    }
+
+    // Debounce 600ms pause to ensure user stopped typing before pre-fetching
+    prefetchTimerRef.current = setTimeout(async () => {
+      try {
+        const abortController = new AbortController();
+        prefetchAbortControllerRef.current = abortController;
+
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+        const res = await fetch('/api/chat/prefetch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: trimmed,
+            fileNames: files.map((f) => f.name),
+            useLocalOffline: isOffline,
+            offlineDocuments: offlineDocs,
+          }),
+          signal: abortController.signal,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.prefetched && Array.isArray(data.candidateDocs) && data.candidateDocs.length > 0) {
+            prefetchCacheRef.current = {
+              draftQuery: trimmed,
+              candidateDocs: data.candidateDocs,
+              timestamp: Date.now(),
+            };
+            setIsPrefetched(true);
+          }
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          // Silent catch for background prefetch
+        }
+      } finally {
+        prefetchAbortControllerRef.current = null;
+      }
+    }, 600);
+  };
 
   // Secret Admin Trigger Refs
   const logoClickCountRef = useRef<number>(0);
@@ -509,6 +579,22 @@ export default function Home() {
       // --- REGULAR CHAT/RAG PATH ---
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
+      // Extract pre-fetched document chunks if draft matches final user message
+      let prefetchedDocsPayload: any[] | undefined = undefined;
+      if (prefetchCacheRef.current) {
+        const cachedQuery = prefetchCacheRef.current.draftQuery.toLowerCase().trim();
+        const currentQuery = userMessage.toLowerCase().trim();
+        if (currentQuery.includes(cachedQuery) || cachedQuery.includes(currentQuery)) {
+          prefetchedDocsPayload = prefetchCacheRef.current.candidateDocs;
+        }
+      }
+
+      // Reset prefetch cache & state
+      prefetchCacheRef.current = null;
+      setIsPrefetched(false);
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+      if (prefetchAbortControllerRef.current) prefetchAbortControllerRef.current.abort();
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -520,6 +606,7 @@ export default function Home() {
           fileNames: files.map((f) => f.name),
           useLocalOffline: isOffline,
           offlineDocuments: offlineDocs,
+          prefetchedDocs: prefetchedDocsPayload,
         }),
         signal: abortController.signal,
       });
@@ -1223,6 +1310,12 @@ export default function Home() {
               )}
 
               <form onSubmit={handleSubmit} className="relative">
+                {isPrefetched && (
+                  <div className="absolute -top-7 right-3 flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium border border-emerald-500/20 backdrop-blur-sm animate-pulse">
+                    <Zap className="h-3 w-3 fill-emerald-500 text-emerald-500" />
+                    <span>⚡ Context pre-warmed</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 p-1.5 rounded-2xl border bg-white dark:bg-slate-900 shadow-lg shadow-black/5 hover:shadow-xl hover:shadow-black/10 transition-shadow duration-300 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-300">
                   <Button
                     type="button"
@@ -1242,7 +1335,7 @@ export default function Home() {
                   <Input
                     ref={chatInputRef}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => handleInputChangeWithPrefetch(e.target.value)}
                     placeholder={
                       isUploading
                         ? 'Uploading document...'
