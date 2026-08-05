@@ -49,10 +49,11 @@ export function PWAInstallManager() {
   }, []);
 
   const handleInstallClick = async (): Promise<boolean> => {
-    if (deferredPrompt) {
+    const activePrompt = deferredPrompt || (typeof window !== 'undefined' ? (window as any).deferredPwaPrompt : null);
+    if (activePrompt) {
       try {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
+        activePrompt.prompt();
+        const { outcome } = await activePrompt.userChoice;
         if (outcome === 'accepted') {
           setIsModalOpen(false);
           setShowTopBanner(false);
@@ -61,6 +62,7 @@ export function PWAInstallManager() {
         console.warn('Install prompt error:', err);
       }
       setDeferredPrompt(null);
+      if (typeof window !== 'undefined') (window as any).deferredPwaPrompt = null;
       return true;
     }
     return false;
