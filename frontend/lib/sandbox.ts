@@ -16,6 +16,7 @@
  */
 
 import vm from 'vm';
+import { SCI } from './scientific-formulas';
 
 export interface SandboxResult {
   success: boolean;
@@ -26,8 +27,8 @@ export interface SandboxResult {
   code: string;
 }
 
-/** Max execution time in milliseconds */
-const EXECUTION_TIMEOUT_MS = 5000;
+/** Max execution time in milliseconds (increased for scientific computations) */
+const EXECUTION_TIMEOUT_MS = 15000;
 
 /** Max result JSON size (prevent memory bombs) */
 const MAX_RESULT_SIZE = 2 * 1024 * 1024; // 2 MB
@@ -110,6 +111,9 @@ export function executeSandboxed(
         warn: () => {},
         error: () => {},
       },
+
+      // Scientific formulas namespace (deterministic, tested implementations)
+      SCI,
     };
 
     // Create an isolated context

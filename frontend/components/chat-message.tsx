@@ -9,6 +9,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { PDFDocument } from '@/types/graphTypes';
 import { MermaidDiagram } from '@/components/mermaid-diagram';
 import { DataChart } from '@/components/data-chart';
+import { ScientificReport } from '@/components/scientific-report';
+import type { ScientificReportData } from '@/components/scientific-report';
 import { ChatAttachment } from '@/lib/history-store';
 import {
   Accordion,
@@ -81,21 +83,35 @@ export function ChatMessage({ message }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const isLoading = message.role === 'assistant' && message.content === '';
 
-  // Extract chart data from <!--CHART_DATA:...--> markers
-  const { displayContent, chartData } = useMemo(() => {
+  // Extract chart data from <!--CHART_DATA:...-->  and scientific reports from <!--SCIENTIFIC_REPORT:...--> markers
+  const { displayContent, chartData, scientificReport } = useMemo(() => {
     if (message.role !== 'assistant' || !message.content) {
-      return { displayContent: message.content, chartData: null };
+      return { displayContent: message.content, chartData: null, scientificReport: null };
     }
-    const chartMatch = message.content.match(/<!--CHART_DATA:([\s\S]*?)-->/);
-    let chart = null;
+
     let content = message.content;
+    let chart = null;
+    let sciReport: ScientificReportData | null = null;
+
+    // Extract scientific report
+    const sciMatch = content.match(/<!--SCIENTIFIC_REPORT:([\s\S]*?)-->/);
+    if (sciMatch) {
+      try {
+        sciReport = JSON.parse(sciMatch[1]);
+      } catch { /* ignore malformed scientific report data */ }
+      content = content.replace(/<!--SCIENTIFIC_REPORT:[\s\S]*?-->/, '').trim();
+    }
+
+    // Extract chart data
+    const chartMatch = content.match(/<!--CHART_DATA:([\s\S]*?)-->/);
     if (chartMatch) {
       try {
         chart = JSON.parse(chartMatch[1]);
       } catch { /* ignore malformed chart data */ }
       content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
     }
-    return { displayContent: content, chartData: chart };
+
+    return { displayContent: content, chartData: chart, scientificReport: sciReport };
   }, [message.content, message.role]);
 
   const handleCopy = async () => {
@@ -302,6 +318,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
                     datasets={chartData.datasets}
                     title={chartData.title}
                   />
+                )}
+
+                {/* Render Scientific Report if scientific analysis data is present */}
+                {scientificReport && (
+                  <ScientificReport data={scientificReport} />
                 )}
               </div>
             )}

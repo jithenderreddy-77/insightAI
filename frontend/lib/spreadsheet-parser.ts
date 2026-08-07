@@ -19,6 +19,10 @@
  */
 
 import * as XLSX from 'xlsx';
+import { detectScientificDataset } from './scientific-dataset-detector';
+import { validateScientificData } from './scientific-validator';
+import type { ScientificDatasetProfile } from './scientific-dataset-detector';
+import type { ValidationReport } from './scientific-validator';
 
 // ---------------------------------------------------------------------------
 // Public Types
@@ -48,6 +52,10 @@ export interface SheetData {
   sampleRows: Record<string, unknown>[];
   /** ALL rows — kept in-memory for the sandbox to query against */
   rows: Record<string, unknown>[];
+  /** Scientific dataset profile (auto-detected after parsing) */
+  scientificProfile?: ScientificDatasetProfile;
+  /** Data quality validation report */
+  validationReport?: ValidationReport;
 }
 
 /** Top-level result object returned by the parser */
@@ -168,6 +176,13 @@ export function parseSpreadsheet(
     try {
       const sheetData = processSheet(ws, sheetName, warnings);
       if (sheetData) {
+        // Auto-detect scientific dataset type and validate data quality
+        try {
+          sheetData.scientificProfile = detectScientificDataset(sheetData);
+          sheetData.validationReport = validateScientificData(sheetData, sheetData.scientificProfile);
+        } catch {
+          // Non-fatal: scientific detection is optional
+        }
         sheets.push(sheetData);
       }
     } catch (err) {

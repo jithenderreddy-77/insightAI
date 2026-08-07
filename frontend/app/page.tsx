@@ -509,16 +509,39 @@ export default function Home() {
         const activeSheet = ssData?.sheets?.[0];
 
         if (activeSheet) {
-          const response = await fetch('/api/spreadsheet-query', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              question: userMessage,
-              sheetData: activeSheet,
-              sheetIndex: 0,
-            }),
-            signal: abortController.signal,
-          });
+          // Detect if this is a scientific dataset (has scientificProfile with non-General type)
+          const isScientificDataset = activeSheet.scientificProfile &&
+            activeSheet.scientificProfile.experimentType !== 'General' &&
+            activeSheet.scientificProfile.confidence > 0.3;
+
+          let response: Response;
+
+          if (isScientificDataset) {
+            // Route to scientific analysis endpoint
+            response = await fetch('/api/scientific-analysis', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                question: userMessage,
+                sheetData: activeSheet,
+                scientificProfile: activeSheet.scientificProfile,
+                validationReport: activeSheet.validationReport || null,
+              }),
+              signal: abortController.signal,
+            });
+          } else {
+            // Route to generic spreadsheet query endpoint
+            response = await fetch('/api/spreadsheet-query', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                question: userMessage,
+                sheetData: activeSheet,
+                sheetIndex: 0,
+              }),
+              signal: abortController.signal,
+            });
+          }
 
           const result = await response.json();
 
@@ -531,8 +554,21 @@ export default function Home() {
             if (result.code) {
               assistantContent += `\n\n<details>\n<summary>🔍 Show generated code</summary>\n\n\`\`\`javascript\n${result.code}\n\`\`\`\n</details>`;
             }
+          } else if (result.type === 'scientific_answer') {
+            // Scientific analysis result — embed as structured report marker
+            const reportData = {
+              result: result.result,
+              experimentType: result.experimentType,
+              instrumentDescription: result.instrumentDescription,
+              dataQualityScore: result.dataQualityScore,
+              explanation: result.explanation,
+              code: result.code,
+              executionTimeMs: result.executionTimeMs,
+            };
+            assistantContent = `🔬 **${result.experimentType} Scientific Analysis**\n\n${result.explanation || ''}`;
+            assistantContent += `\n\n<!--SCIENTIFIC_REPORT:${JSON.stringify(reportData)}-->`;
           } else if (result.type === 'answer') {
-            // Format the result
+            // Generic spreadsheet analysis result
             const formattedResult = typeof result.result === 'object'
               ? JSON.stringify(result.result, null, 2)
               : String(result.result);

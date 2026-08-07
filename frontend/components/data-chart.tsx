@@ -52,6 +52,14 @@ export interface DataChartProps {
   title?: string;
   /** Callback when user clicks a data point */
   onPointClick?: (label: string, value: number, datasetLabel: string) => void;
+  /** Scientific axis labels */
+  xAxisLabel?: string;
+  yAxisLabel?: string;
+  /** Scientific axis units */
+  xUnit?: string;
+  yUnit?: string;
+  /** Scientific experiment type for specialized styling */
+  scientificType?: string;
 }
 
 // Premium color palette
@@ -77,8 +85,9 @@ const CHART_BORDERS = [
   'rgba(20, 184, 166, 1)',
 ];
 
-export function DataChart({ type, labels, datasets, title, onPointClick }: DataChartProps) {
+export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLabel, yAxisLabel, xUnit, yUnit, scientificType }: DataChartProps) {
   const chartRef = useRef<any>(null);
+  const isScientific = !!(xAxisLabel || yAxisLabel || scientificType);
 
   // Apply colors to datasets
   const coloredDatasets = datasets.map((ds, i) => ({
@@ -145,6 +154,12 @@ export function DataChart({ type, labels, datasets, title, onPointClick }: DataC
     scales: type !== 'pie' && type !== 'doughnut' ? {
       x: {
         grid: { display: false },
+        title: {
+          display: !!(xAxisLabel || xUnit),
+          text: xAxisLabel ? (xUnit ? `${xAxisLabel} (${xUnit})` : xAxisLabel) : (xUnit || ''),
+          font: { size: 12, weight: '600' as const, family: "'Inter', sans-serif" },
+          color: isScientific ? '#6366f1' : undefined,
+        },
         ticks: {
           font: { size: 10, family: "'Inter', sans-serif" },
           maxRotation: 45,
@@ -152,6 +167,12 @@ export function DataChart({ type, labels, datasets, title, onPointClick }: DataC
       },
       y: {
         grid: { color: 'rgba(148, 163, 184, 0.1)' },
+        title: {
+          display: !!(yAxisLabel || yUnit),
+          text: yAxisLabel ? (yUnit ? `${yAxisLabel} (${yUnit})` : yAxisLabel) : (yUnit || ''),
+          font: { size: 12, weight: '600' as const, family: "'Inter', sans-serif" },
+          color: isScientific ? '#6366f1' : undefined,
+        },
         ticks: { font: { size: 10, family: "'Inter', sans-serif" } },
       },
     } : undefined,
@@ -181,7 +202,7 @@ export function DataChart({ type, labels, datasets, title, onPointClick }: DataC
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
           <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-            Data Visualization
+            {isScientific ? `${scientificType || 'Scientific'} Visualization` : 'Data Visualization'}
           </span>
         </div>
         <button
