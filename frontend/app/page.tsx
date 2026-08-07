@@ -514,6 +514,9 @@ export default function Home() {
             activeSheet.scientificProfile.experimentType !== 'General' &&
             activeSheet.scientificProfile.confidence > 0.3;
 
+          // Collect all sheets across all active uploaded files in session for multi-dataset comparisons
+          const allSheets = Object.values(spreadsheetSessions).flatMap((s: any) => s?.sheets || []);
+
           let response: Response;
 
           if (isScientificDataset) {
@@ -524,6 +527,7 @@ export default function Home() {
               body: JSON.stringify({
                 question: userMessage,
                 sheetData: activeSheet,
+                allSheets,
                 scientificProfile: activeSheet.scientificProfile,
                 validationReport: activeSheet.validationReport || null,
               }),

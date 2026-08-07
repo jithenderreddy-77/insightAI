@@ -743,6 +743,287 @@ function convertUnit(value: number, from: string, to: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Correlation & Matrix Analysis
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute Pearson correlation coefficient r between two numeric arrays.
+ */
+function pearson(xValues: number[], yValues: number[]): number {
+  const n = Math.min(xValues.length, yValues.length);
+  if (n < 2) return 0;
+
+  const statsX = describe(xValues);
+  const statsY = describe(yValues);
+
+  if (statsX.stdDev === 0 || statsY.stdDev === 0) return 0;
+
+  let sumCov = 0;
+  for (let i = 0; i < n; i++) {
+    sumCov += (xValues[i] - statsX.mean) * (yValues[i] - statsY.mean);
+  }
+
+  const r = sumCov / ((n - 1) * statsX.stdDev * statsY.stdDev);
+  return parseFloat(Math.max(-1, Math.min(1, r)).toFixed(4));
+}
+
+/**
+ * Compute Spearman rank correlation coefficient.
+ */
+function spearman(xValues: number[], yValues: number[]): number {
+  const n = Math.min(xValues.length, yValues.length);
+  if (n < 2) return 0;
+
+  const rank = (arr: number[]) => {
+    const sorted = arr.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+    const ranks = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) {
+      ranks[sorted[i].i] = i + 1;
+    }
+    return ranks;
+  };
+
+  const rankX = rank(xValues.slice(0, n));
+  const rankY = rank(yValues.slice(0, n));
+
+  return pearson(rankX, rankY);
+}
+
+export interface CorrelationMatrixResult {
+  columns: string[];
+  matrix: number[][];
+}
+
+/**
+ * Compute full Pearson correlation matrix for specified numeric columns in data array.
+ */
+function correlationMatrix(data: Record<string, unknown>[], columns: string[]): CorrelationMatrixResult {
+  const nCols = columns.length;
+  const matrix: number[][] = Array.from({ length: nCols }, () => new Array(nCols).fill(1));
+
+  const colValues: Record<string, number[]> = {};
+  for (const col of columns) {
+    colValues[col] = data
+      .map(r => r[col])
+      .filter((v): v is number => typeof v === 'number' && !isNaN(v) && isFinite(v));
+  }
+
+  for (let i = 0; i < nCols; i++) {
+    for (let j = i + 1; j < nCols; j++) {
+      const c1 = columns[i];
+      const c2 = columns[j];
+      const v1: number[] = [];
+      const v2: number[] = [];
+
+      for (const row of data) {
+        const val1 = row[c1];
+        const val2 = row[c2];
+        if (typeof val1 === 'number' && !isNaN(val1) && typeof val2 === 'number' && !isNaN(val2)) {
+          v1.push(val1);
+          v2.push(val2);
+        }
+      }
+
+      const r = pearson(v1, v2);
+      matrix[i][j] = r;
+      matrix[j][i] = r;
+    }
+  }
+
+  return { columns, matrix };
+}
+
+// ---------------------------------------------------------------------------
+// Non-Linear Curve Fitting
+// ---------------------------------------------------------------------------
+
+/**
+ * Exponential fit: y = a * exp(b * x)
+ */
+function exponentialRegression(xValues: number[], yValues: number[]): RegressionResult & { a: number; b: number } {
+  // Linearize by taking ln(y): ln(y) = ln(a) + b*x
+  const validX: number[] = [];
+  const lnY: number[] = [];
+
+  for (let i = 0; i < Math.min(xValues.length, yValues.length); i++) {
+    if (yValues[i] > 0) {
+      validX.push(xValues[i]);
+      lnY.push(Math.log(yValues[i]));
+    }
+  }
+
+  const linFit = linearRegression(validX, lnY);
+  const a = Math.exp(linFit.intercept);
+  const b = linFit.slope;
+
+  return {
+    ...linFit,
+    a: parseFloat(a.toFixed(6)),
+    b: parseFloat(b.toFixed(6)),
+    equation: `y = ${a.toFixed(4)} * exp(${b.toFixed(4)} * x)`,
+  };
+}
+
+/**
+ * Power law fit: y = a * x^b
+ */
+function powerRegression(xValues: number[], yValues: number[]): RegressionResult & { a: number; b: number } {
+  // Linearize by taking ln(x) and ln(y): ln(y) = ln(a) + b*ln(x)
+  const lnX: number[] = [];
+  const lnY: number[] = [];
+
+  for (let i = 0; i < Math.min(xValues.length, yValues.length); i++) {
+    if (xValues[i] > 0 && yValues[i] > 0) {
+      lnX.push(Math.log(xValues[i]));
+      lnY.push(Math.log(yValues[i]));
+    }
+  }
+
+  const linFit = linearRegression(lnX, lnY);
+  const a = Math.exp(linFit.intercept);
+  const b = linFit.slope;
+
+  return {
+    ...linFit,
+    a: parseFloat(a.toFixed(6)),
+    b: parseFloat(b.toFixed(6)),
+    equation: `y = ${a.toFixed(4)} * x^(${b.toFixed(4)})`,
+  };
+}
+
+/**
+ * Logarithmic fit: y = a + b * ln(x)
+ */
+function logarithmicRegression(xValues: number[], yValues: number[]): RegressionResult & { a: number; b: number } {
+  const lnX: number[] = [];
+  const validY: number[] = [];
+
+  for (let i = 0; i < Math.min(xValues.length, yValues.length); i++) {
+    if (xValues[i] > 0) {
+      lnX.push(Math.log(xValues[i]));
+      validY.push(yValues[i]);
+    }
+  }
+
+  const linFit = linearRegression(lnX, validY);
+  return {
+    ...linFit,
+    a: linFit.intercept,
+    b: linFit.slope,
+    equation: `y = ${linFit.intercept.toFixed(4)} + ${linFit.slope.toFixed(4)} * ln(x)`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Peak Profile Functions (Gaussian & Lorentzian)
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluate Gaussian peak profile: y = amp * exp(-((x - center)^2) / (2 * sigma^2))
+ */
+function gaussian(x: number, amp: number, center: number, sigma: number): number {
+  if (sigma === 0) return 0;
+  return amp * Math.exp(-Math.pow(x - center, 2) / (2 * Math.pow(sigma, 2)));
+}
+
+/**
+ * Evaluate Lorentzian peak profile: y = amp / (1 + ((x - center) / gamma)^2)
+ */
+function lorentzian(x: number, amp: number, center: number, gamma: number): number {
+  if (gamma === 0) return 0;
+  return amp / (1 + Math.pow((x - center) / gamma, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Histogram & Distribution Analysis
+// ---------------------------------------------------------------------------
+
+export interface HistogramResult {
+  binEdges: number[];
+  binCenters: number[];
+  counts: number[];
+  frequencies: number[]; // relative frequencies (sums to 1)
+  binWidth: number;
+}
+
+/**
+ * Bin 1D array into histogram with specified number of bins.
+ */
+function histogram(values: number[], numBins: number = 10): HistogramResult {
+  const clean = values.filter(v => !isNaN(v) && isFinite(v));
+  if (clean.length === 0) {
+    return { binEdges: [], binCenters: [], counts: [], frequencies: [], binWidth: 0 };
+  }
+
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  const range = max - min || 1;
+  const binWidth = range / numBins;
+
+  const binEdges: number[] = [];
+  for (let i = 0; i <= numBins; i++) {
+    binEdges.push(parseFloat((min + i * binWidth).toFixed(4)));
+  }
+
+  const binCenters: number[] = [];
+  for (let i = 0; i < numBins; i++) {
+    binCenters.push(parseFloat(((binEdges[i] + binEdges[i + 1]) / 2).toFixed(4)));
+  }
+
+  const counts = new Array(numBins).fill(0);
+  for (const v of clean) {
+    let idx = Math.floor((v - min) / binWidth);
+    if (idx >= numBins) idx = numBins - 1;
+    if (idx < 0) idx = 0;
+    counts[idx]++;
+  }
+
+  const total = clean.length;
+  const frequencies = counts.map(c => parseFloat((c / total).toFixed(4)));
+
+  return { binEdges, binCenters, counts, frequencies, binWidth: parseFloat(binWidth.toFixed(4)) };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Dataset Alignment & Comparison
+// ---------------------------------------------------------------------------
+
+export interface ComparisonResult {
+  sampleNames: string[];
+  metrics: Record<string, (number | string)[]>;
+  differences: Record<string, string>;
+}
+
+/**
+ * Compare key summary metrics between multiple datasets / samples.
+ */
+function compareDatasets(
+  datasets: Array<{ name: string; metrics: Record<string, number | string> }>
+): ComparisonResult {
+  const sampleNames = datasets.map(d => d.name);
+  const allMetricKeys = Array.from(new Set(datasets.flatMap(d => Object.keys(d.metrics))));
+
+  const metrics: Record<string, (number | string)[]> = {};
+  const differences: Record<string, string> = {};
+
+  for (const key of allMetricKeys) {
+    const vals = datasets.map(d => d.metrics[key] ?? '—');
+    metrics[key] = vals;
+
+    // Check numerical differences
+    const numVals = vals.filter((v): v is number => typeof v === 'number');
+    if (numVals.length >= 2) {
+      const minVal = Math.min(...numVals);
+      const maxVal = Math.max(...numVals);
+      const pctDiff = minVal !== 0 ? (((maxVal - minVal) / Math.abs(minVal)) * 100).toFixed(1) : 'N/A';
+      differences[key] = `${maxVal > minVal ? '+' : ''}${pctDiff}% range`;
+    }
+  }
+
+  return { sampleNames, metrics, differences };
+}
+
+// ---------------------------------------------------------------------------
 // Export namespace object for sandbox injection
 // ---------------------------------------------------------------------------
 
@@ -754,6 +1035,8 @@ export const SCI = {
   // Peak analysis
   peakDetect,
   calculateFWHM,
+  gaussian,
+  lorentzian,
 
   // XRD
   scherrer,
@@ -764,12 +1047,24 @@ export const SCI = {
   // VSM
   vsmAnalyze,
 
-  // Statistics
+  // Statistics & Regressions
   describe,
   linearRegression,
+  exponentialRegression,
+  powerRegression,
+  logarithmicRegression,
   polyFit,
   trapezoidalIntegrate,
   interpolate,
+
+  // Correlation Matrix
+  pearson,
+  spearman,
+  correlationMatrix,
+
+  // Distributions & Comparisons
+  histogram,
+  compareDatasets,
 
   // Utilities
   convertUnit,
@@ -782,3 +1077,4 @@ export const SCI = {
   radToDeg: (rad: number) => rad * 180 / Math.PI,
   round: (val: number, decimals: number) => parseFloat(val.toFixed(decimals)),
 };
+

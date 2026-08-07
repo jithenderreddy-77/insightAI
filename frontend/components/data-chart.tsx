@@ -12,6 +12,7 @@ import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
+  RadialLinearScale,
   BarElement,
   LineElement,
   PointElement,
@@ -21,13 +22,14 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import { Bar, Line, Pie, Doughnut, Scatter } from 'react-chartjs-2';
-import { Download } from 'lucide-react';
+import { Bar, Line, Pie, Doughnut, Scatter, Radar } from 'react-chartjs-2';
+import { Download, Table } from 'lucide-react';
 
 // Register Chart.js components
 ChartJS.register(
   CategoryScale,
   LinearScale,
+  RadialLinearScale,
   BarElement,
   LineElement,
   PointElement,
@@ -45,10 +47,15 @@ export interface ChartDataset {
   borderColor?: string | string[];
 }
 
+export interface HeatmapMatrixData {
+  columns: string[];
+  matrix: number[][];
+}
+
 export interface DataChartProps {
-  type: 'bar' | 'line' | 'pie' | 'doughnut' | 'scatter';
-  labels: string[];
-  datasets: ChartDataset[];
+  type: 'bar' | 'line' | 'pie' | 'doughnut' | 'scatter' | 'radar' | 'area' | 'heatmap';
+  labels?: string[];
+  datasets?: ChartDataset[];
   title?: string;
   /** Callback when user clicks a data point */
   onPointClick?: (label: string, value: number, datasetLabel: string) => void;
@@ -60,6 +67,8 @@ export interface DataChartProps {
   yUnit?: string;
   /** Scientific experiment type for specialized styling */
   scientificType?: string;
+  /** Matrix data for heatmap visualization */
+  matrixData?: HeatmapMatrixData;
 }
 
 // Premium color palette
@@ -85,9 +94,68 @@ const CHART_BORDERS = [
   'rgba(20, 184, 166, 1)',
 ];
 
-export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLabel, yAxisLabel, xUnit, yUnit, scientificType }: DataChartProps) {
+export function DataChart({ type, labels = [], datasets = [], title, onPointClick, xAxisLabel, yAxisLabel, xUnit, yUnit, scientificType, matrixData }: DataChartProps) {
   const chartRef = useRef<any>(null);
   const isScientific = !!(xAxisLabel || yAxisLabel || scientificType);
+
+  // Render Heatmap Matrix if type === 'heatmap'
+  if (type === 'heatmap' && matrixData && matrixData.columns && matrixData.matrix) {
+    return (
+      <div className="my-4 rounded-2xl border border-indigo-100 dark:border-indigo-900/40 bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl p-4 shadow-lg">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+            <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+              {title || 'Correlation Heatmap Matrix'}
+            </span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr>
+                <th className="p-2 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50"></th>
+                {matrixData.columns.map((col, i) => (
+                  <th key={i} className="p-2 font-semibold text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrixData.matrix.map((row, ri) => (
+                <tr key={ri}>
+                  <td className="p-2 font-semibold text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                    {matrixData.columns[ri]}
+                  </td>
+                  {row.map((val, ci) => {
+                    // Color scale: -1 (deep blue/red) to 0 (white) to 1 (deep indigo/emerald)
+                    let bgStyle = '';
+                    if (val > 0) {
+                      bgStyle = `rgba(99, 102, 241, ${Math.abs(val) * 0.7 + 0.1})`;
+                    } else if (val < 0) {
+                      bgStyle = `rgba(239, 68, 68, ${Math.abs(val) * 0.7 + 0.1})`;
+                    } else {
+                      bgStyle = 'transparent';
+                    }
+                    return (
+                      <td
+                        key={ci}
+                        style={{ backgroundColor: bgStyle }}
+                        className="p-2 text-center font-mono font-semibold text-slate-800 dark:text-slate-100 border border-slate-200/50 dark:border-slate-800/50"
+                      >
+                        {val.toFixed(2)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   // Apply colors to datasets
   const coloredDatasets = datasets.map((ds, i) => ({
@@ -95,6 +163,8 @@ export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLa
     backgroundColor: ds.backgroundColor || (
       type === 'pie' || type === 'doughnut'
         ? CHART_COLORS.slice(0, labels.length)
+        : type === 'area'
+        ? 'rgba(99, 102, 241, 0.2)'
         : CHART_COLORS[i % CHART_COLORS.length]
     ),
     borderColor: ds.borderColor || (
@@ -104,9 +174,9 @@ export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLa
     ),
     borderWidth: type === 'pie' || type === 'doughnut' ? 2 : 2,
     borderRadius: type === 'bar' ? 6 : 0,
-    tension: type === 'line' ? 0.4 : 0,
-    fill: type === 'line' ? 'origin' : false,
-    pointRadius: type === 'line' || type === 'scatter' ? 4 : 0,
+    tension: type === 'line' || type === 'area' ? 0.4 : 0,
+    fill: type === 'area' ? 'origin' : false,
+    pointRadius: type === 'line' || type === 'area' || type === 'scatter' ? 4 : 0,
     pointHoverRadius: 7,
   }));
 
@@ -124,7 +194,7 @@ export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLa
         padding: { bottom: 16 },
       },
       legend: {
-        display: datasets.length > 1 || type === 'pie' || type === 'doughnut',
+        display: datasets.length > 1 || type === 'pie' || type === 'doughnut' || type === 'radar',
         position: 'bottom' as const,
         labels: {
           font: { size: 11, family: "'Inter', sans-serif" },
@@ -151,7 +221,7 @@ export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLa
         onPointClick(label, value, dsLabel);
       }
     },
-    scales: type !== 'pie' && type !== 'doughnut' ? {
+    scales: type !== 'pie' && type !== 'doughnut' && type !== 'radar' ? {
       x: {
         grid: { display: false },
         title: {
@@ -188,13 +258,17 @@ export function DataChart({ type, labels, datasets, title, onPointClick, xAxisLa
     a.click();
   };
 
-  const ChartComponent = {
+  const chartTypeKey = (type === 'area' ? 'line' : type === 'heatmap' ? 'bar' : type) as keyof typeof ChartComponentMap;
+  const ChartComponentMap = {
     bar: Bar,
     line: Line,
+    area: Line,
     pie: Pie,
     doughnut: Doughnut,
     scatter: Scatter,
-  }[type] || Bar;
+    radar: Radar,
+  };
+  const ChartComponent = ChartComponentMap[chartTypeKey] || Bar;
 
   return (
     <div className="my-4 rounded-2xl border border-indigo-100 dark:border-indigo-900/40 bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl p-4 shadow-lg">

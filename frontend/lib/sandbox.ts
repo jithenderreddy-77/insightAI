@@ -48,6 +48,7 @@ export function executeSandboxed(
   code: string,
   data: Record<string, unknown>[],
   timeout: number = EXECUTION_TIMEOUT_MS,
+  extraGlobals?: Record<string, unknown>,
 ): SandboxResult {
   const startTime = Date.now();
 
@@ -114,6 +115,9 @@ export function executeSandboxed(
 
       // Scientific formulas namespace (deterministic, tested implementations)
       SCI,
+
+      // Any extra globals (e.g. allSheets for multi-file dataset analysis)
+      ...(extraGlobals || {}),
     };
 
     // Create an isolated context

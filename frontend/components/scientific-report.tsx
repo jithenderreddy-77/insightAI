@@ -36,15 +36,19 @@ export interface ScientificReportData {
     interpretation?: string;
     limitations?: string[];
     chartSpec?: {
-      type: 'line' | 'bar' | 'scatter' | 'pie';
-      labels: string[];
-      datasets: Array<{ label: string; data: number[] }>;
+      type: 'line' | 'bar' | 'scatter' | 'pie' | 'doughnut' | 'radar' | 'area' | 'heatmap';
+      labels?: string[];
+      datasets?: Array<{ label: string; data: number[] }>;
       title?: string;
       xAxisLabel?: string;
       yAxisLabel?: string;
       xUnit?: string;
       yUnit?: string;
       scientificType?: string;
+      matrixData?: {
+        columns: string[];
+        matrix: number[][];
+      };
     } | null;
     tableData?: {
       title?: string;

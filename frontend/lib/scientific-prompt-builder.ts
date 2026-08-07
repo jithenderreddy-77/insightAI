@@ -21,8 +21,10 @@ export function buildScientificPrompt(
   sheet: SheetData,
   profile: ScientificDatasetProfile,
   validation: ValidationReport | null,
+  allSheets?: SheetData[],
 ): string {
   const schemaBlock = buildSchemaBlock(sheet);
+  const multiSheetBlock = allSheets && allSheets.length > 1 ? buildMultiSheetBlock(allSheets) : '';
   const domainBlock = buildDomainBlock(profile);
   const validationBlock = validation ? buildValidationBlock(validation) : '';
   const sciApiBlock = buildSciApiBlock(profile.experimentType);
@@ -37,9 +39,11 @@ export function buildScientificPrompt(
 - NEVER perform arithmetic yourself — always delegate to SCI functions.
 - Clearly separate: Measured Results, Computed Results, Interpretation, and Limitations.
 - Always state equations, assumptions, and parameters used.
+- If asked for publication-quality output, structure your interpretation as a clear, rigorous "Results and Discussion" section with appropriate terminology.
 
-## DATASET INFORMATION
+## PRIMARY DATASET INFORMATION
 ${schemaBlock}
+${multiSheetBlock}
 
 ## EXPERIMENT TYPE: ${profile.experimentType}
 ${domainBlock}
@@ -353,28 +357,62 @@ function buildGeneralDomain(profile: ScientificDatasetProfile): string {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Multi-Sheet / Multi-Dataset Context Block
+// ---------------------------------------------------------------------------
+
+function buildMultiSheetBlock(allSheets: SheetData[]): string {
+  const lines: string[] = ['\n## OTHER AVAILABLE DATASETS IN THIS SESSION:'];
+  lines.push('You have access to an `allSheets` array in code execution containing all uploaded sheets.');
+  lines.push('');
+
+  for (let i = 0; i < allSheets.length; i++) {
+    const s = allSheets[i];
+    const expType = s.scientificProfile?.experimentType || 'General';
+    lines.push(`Sheet ${i + 1}: "${s.name}" (${expType}, ${s.rowCount} rows × ${s.headers.length} cols)`);
+    lines.push(`  Headers: ${s.headers.join(', ')}`);
+  }
+
+  lines.push('');
+  lines.push('Use `SCI.compareDatasets()` or iterate through `allSheets` to perform multi-sample comparison.');
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // SCI API Documentation Block
 // ---------------------------------------------------------------------------
 
 function buildSciApiBlock(type: ExperimentType): string {
   let block = `\`\`\`
-// Peak Detection
+// Peak Analysis & Profiles
 SCI.peakDetect(xValues, yValues, {minProminence?: number, minDistance?: number}) → PeakInfo[]
-  // Returns: [{index, x, y, fwhm, halfMaxLeft, halfMaxRight}, ...]
+SCI.calculateFWHM(xValues, yValues, peakIdx, halfMaxLevel) → {fwhm, left, right}
+SCI.gaussian(x, amp, center, sigma) → number
+SCI.lorentzian(x, amp, center, gamma) → number
 
-// Statistics
+// Statistical & Regressions
 SCI.describe(values) → {count, mean, median, stdDev, min, max, range, variance, sem, cv, q1, q3, iqr}
 SCI.linearRegression(xValues, yValues) → {slope, intercept, rSquared, slopeError, interceptError, equation}
-SCI.polyFit(xValues, yValues, degree?) → [a0, a1, a2, ...]  // coefficients
+SCI.exponentialRegression(xValues, yValues) → {slope, intercept, rSquared, a, b, equation} // y = a * e^(b*x)
+SCI.powerRegression(xValues, yValues) → {slope, intercept, rSquared, a, b, equation}       // y = a * x^b
+SCI.logarithmicRegression(xValues, yValues) → {slope, intercept, rSquared, a, b, equation} // y = a + b * ln(x)
+SCI.polyFit(xValues, yValues, degree?) → [a0, a1, a2, ...]  // y = a0 + a1*x + a2*x^2 + ...
+
+// Correlation & Matrix Analysis
+SCI.pearson(xValues, yValues) → number (-1 to 1)
+SCI.spearman(xValues, yValues) → number (-1 to 1)
+SCI.correlationMatrix(dataRows, columnNames[]) → {columns: [...], matrix: [[...]]}
+
+// Distributions & Multi-Dataset Tools
+SCI.histogram(values, numBins?) → {binEdges, binCenters, counts, frequencies, binWidth}
+SCI.compareDatasets(datasets[]) → {sampleNames: [...], metrics: {...}, differences: {...}}
 
 // Integration & Interpolation
 SCI.trapezoidalIntegrate(xValues, yValues) → number
 SCI.interpolate(xValues, yValues, xTarget) → number
 
-// Unit Conversion
+// Unit Conversion & Math Helpers
 SCI.convertUnit(value, fromUnit, toUnit) → number
-
-// Math Helpers
 SCI.degToRad(degrees) → radians
 SCI.radToDeg(radians) → degrees
 SCI.round(value, decimals) → number
@@ -388,7 +426,6 @@ SCI.scherrer(twoTheta_deg, fwhm_deg, wavelength?, K?) → {crystalliteSize_nm, K
 SCI.bragg(twoTheta_deg, wavelength?, n?) → {d_spacing_angstrom, wavelength_angstrom, twoTheta_deg, n, equation}
 SCI.latticeParameterCubic(d_spacing, h, k, l) → number (lattice parameter in Å)
 SCI.williamsonHall(peaks, wavelength?, K?) → {strain, crystalliteSize_nm, regression, xData, yData}
-  // peaks: [{twoTheta_deg, fwhm_deg}, ...]
 
 // XRD Constants
 SCI.X_RAY_WAVELENGTHS = {"Cu-Kα": 1.5406, "Mo-Kα": 0.7107, ...}
@@ -433,27 +470,42 @@ function buildOutputFormat(): string {
   return `
 ## CHART SPECIFICATION
 If a visualization is helpful, include a chartSpec in your result object:
-\`\`\`
+\`\`\`javascript
+// Standard charts: "line" | "bar" | "scatter" | "pie" | "doughnut" | "radar" | "area"
 chartSpec: {
-  type: "line" | "bar" | "scatter" | "pie",
+  type: "line" | "bar" | "scatter" | "pie" | "doughnut" | "radar" | "area",
   labels: [...],
-  datasets: [{label: "...", data: [...]}],
+  datasets: [{label: "Sample A", data: [...]}, {label: "Sample B", data: [...]}],
   title: "...",
   xAxisLabel: "...",
   yAxisLabel: "...",
   xUnit: "...",
   yUnit: "...",
-  scientificType: "XRD" | "VSM" | "FTIR" | etc.  // For specialized styling
+  scientificType: "XRD" | "VSM" | "XPS" | etc.
+}
+
+// For Correlation Heatmaps:
+chartSpec: {
+  type: "heatmap",
+  title: "Correlation Matrix",
+  matrixData: {
+    columns: ["ColA", "ColB", "ColC"],
+    matrix: [
+      [1.0, 0.85, -0.42],
+      [0.85, 1.0, -0.12],
+      [-0.42, -0.12, 1.0]
+    ]
+  }
 }
 \`\`\`
 
 ## TABLE DATA
 For publication-quality tables, include tableData:
-\`\`\`
+\`\`\`javascript
 tableData: {
-  title: "Table 1: ...",
-  headers: ["Parameter", "Value", "Unit"],
-  rows: [["Crystallite Size", "23.4", "nm"], ...]
+  title: "Table 1: Experimental Parameters and Results",
+  headers: ["Parameter", "Sample A", "Sample B", "Unit"],
+  rows: [["Crystallite Size", "23.4", "18.1", "nm"], ...]
 }
 \`\`\`
 
@@ -465,7 +517,7 @@ result = {
   computedResults: { ... },
   equations: [...],
   assumptions: [...],
-  interpretation: "...",
+  interpretation: "Clear scientific explanation formatted with bold headers where applicable",
   limitations: [...],
   chartSpec: { ... } or null,
   tableData: { ... } or null

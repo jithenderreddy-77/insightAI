@@ -56,11 +56,13 @@ export async function POST(req: NextRequest) {
     const {
       question,
       sheetData,
+      allSheets,
       scientificProfile,
       validationReport,
     } = body as {
       question: string;
       sheetData: SheetData;
+      allSheets?: SheetData[];
       scientificProfile?: ScientificDatasetProfile;
       validationReport?: ValidationReport | null;
     };
@@ -105,11 +107,12 @@ export async function POST(req: NextRequest) {
       supportedAnalyses: ['Descriptive statistics', 'Data visualization'],
     };
 
-    // Build the scientific system prompt
+    // Build the scientific system prompt (with multi-sheet context if available)
     const systemPrompt = buildScientificPrompt(
       sheetData,
       profile,
       validationReport || null,
+      allSheets,
     );
 
     // --- ATTEMPT 1: Generate code ---
@@ -154,8 +157,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Prepare sandbox extra globals (such as allSheets array)
+    const extraGlobals: Record<string, unknown> = {};
+    if (allSheets && Array.isArray(allSheets) && allSheets.length > 0) {
+      extraGlobals.allSheets = allSheets.map(s => ({
+        name: s.name,
+        headers: s.headers,
+        rowCount: s.rowCount,
+        rows: s.rows,
+        scientificProfile: s.scientificProfile,
+      }));
+    }
+
     // --- EXECUTE in sandbox ---
-    let sandboxResult = executeSandboxed(code, sheetData.rows);
+    let sandboxResult = executeSandboxed(code, sheetData.rows, undefined, extraGlobals);
 
     // --- SELF-CORRECTION: retry on failure ---
     if (!sandboxResult.success && sandboxResult.error) {
@@ -167,7 +182,7 @@ export async function POST(req: NextRequest) {
         if (retryCode) {
           code = retryCode;
           explanation = extractExplanation(retryResponse) || explanation;
-          sandboxResult = executeSandboxed(retryCode, sheetData.rows);
+          sandboxResult = executeSandboxed(retryCode, sheetData.rows, undefined, extraGlobals);
         }
       }
     }
