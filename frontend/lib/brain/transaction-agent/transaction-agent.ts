@@ -13,10 +13,12 @@
 
 import { transactionStateMachine } from './transaction-state-machine';
 import { eCommerceAdapter } from './adapters/ecommerce-adapter';
+import { rideAdapter } from './adapters/ride-adapter';
 import type {
   CandidateProduct,
   CartVerificationResult,
   ProductConstraintFilter,
+  RideOption,
   TransactionIntent,
   TransactionRecord,
 } from './types';
@@ -35,19 +37,31 @@ export class TransactionAgent {
    */
   public async handleCommand(options: {
     intent: TransactionIntent;
-    action: 'search' | 'add_to_cart' | 'prepare_purchase' | 'confirm_transaction' | 'cancel_transaction';
+    action: 'search' | 'add_to_cart' | 'prepare_purchase' | 'compare_rides' | 'book_ride' | 'confirm_transaction' | 'cancel_transaction';
     query: string;
     constraints?: ProductConstraintFilter;
+    pickupLocation?: string;
+    destinationLocation?: string;
     selectedProductId?: string;
     targetSize?: string;
     platform?: string;
     transactionId?: string;
   }): Promise<TransactionAgentResult> {
-    const { intent, action, query, constraints = {}, targetSize, platform = 'Amazon', transactionId } = options;
+    const {
+      intent,
+      action,
+      query,
+      constraints = {},
+      pickupLocation,
+      destinationLocation,
+      targetSize,
+      platform = intent === 'ride_booking' ? 'Uber' : 'Amazon',
+      transactionId,
+    } = options;
 
     // Parse constraints from raw query if missing
     const parsedConstraints = this.parseConstraints(query, constraints);
-    const platformName = platform || 'Amazon';
+    const platformName = platform || (intent === 'ride_booking' ? 'Uber' : 'Amazon');
 
     // Check for existing active transaction or create a new one
     let tx = transactionId
@@ -59,6 +73,10 @@ export class TransactionAgent {
     }
 
     // ── ACTION ROUTING ──
+
+    if (intent === 'ride_booking' || action === 'compare_rides' || action === 'book_ride') {
+      return this.executeRideWorkflow(tx, query, pickupLocation, destinationLocation || query, action, platformName);
+    }
 
     switch (action) {
       case 'search':
@@ -298,6 +316,65 @@ export class TransactionAgent {
       spokenResponse: 'Transaction cancelled.',
       clientActionPayload: {
         type: 'TRANSACTION_CANCELLED',
+      },
+    };
+  }
+
+  /**
+   * Phase 3: Execute Ride Booking Workflow (Pickup/Destination resolution & option comparison).
+   */
+  private async executeRideWorkflow(
+    tx: TransactionRecord,
+    query: string,
+    pickupRaw?: string,
+    destinationRaw?: string,
+    action: string = 'compare_rides',
+    preferredPlatform: string = 'Uber',
+  ): Promise<TransactionAgentResult> {
+    transactionStateMachine.transitionState(tx.transactionId, 'SEARCHING');
+
+    const searchResult = await rideAdapter.searchAndCompareRides({
+      pickupRaw,
+      destinationRaw: destinationRaw || query,
+      preferredPlatform,
+    });
+
+    if (searchResult.needsPickupClarification) {
+      return {
+        success: false,
+        transaction: tx,
+        spokenResponse: searchResult.clarificationPrompt || 'Where should I pick you up?',
+      };
+    }
+
+    if (searchResult.needsDestinationClarification) {
+      return {
+        success: false,
+        transaction: tx,
+        spokenResponse: searchResult.clarificationPrompt || 'Where would you like to go?',
+      };
+    }
+
+    const bestRide = searchResult.cheapestOption || searchResult.availableOptions[0];
+
+    transactionStateMachine.transitionState(tx.transactionId, 'AWAITING_CONFIRMATION', {
+      rideOption: bestRide,
+      finalPrice: bestRide.estimatedFare,
+    });
+
+    const fareFormatted = `₹${bestRide.estimatedFare}`;
+
+    return {
+      success: true,
+      transaction: tx,
+      spokenResponse: `${bestRide.platform} (${bestRide.rideType}) is estimated at ${fareFormatted} with a ${bestRide.etaMinutes}-minute pickup time from ${searchResult.pickup.resolvedAddress} to ${searchResult.destination.resolvedAddress}. Would you like me to book it?`,
+      clientActionPayload: {
+        type: 'SHOW_RIDE_PREVIEW',
+        platform: bestRide.platform,
+        rideOption: bestRide,
+        allOptions: searchResult.availableOptions,
+        pickup: searchResult.pickup,
+        destination: searchResult.destination,
       },
     };
   }

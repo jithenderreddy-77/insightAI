@@ -119,6 +119,7 @@ export interface RideOption {
   estimatedDurationMinutes?: number;
   pickupLocation: LocationResolution;
   destination: LocationResolution;
+  destinationLocation?: LocationResolution;
 }
 
 // ---------------------------------------------------------------------------

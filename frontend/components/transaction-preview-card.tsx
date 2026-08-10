@@ -20,10 +20,13 @@ import {
   DollarSign,
   Send,
   XCircle,
-  Truck,
+  Car,
+  Navigation,
+  Clock,
+  MapPin,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { CandidateProduct, CartVerificationResult, TransactionRecord } from '@/lib/brain/transaction-agent/types';
+import type { CandidateProduct, CartVerificationResult, TransactionRecord, RideOption } from '@/lib/brain/transaction-agent/types';
 
 export interface TransactionPreviewCardProps {
   transaction: TransactionRecord;
@@ -44,8 +47,122 @@ export function TransactionPreviewCard({
   const [isLoading, setIsLoading] = useState(false);
 
   const product = transaction.selectedProduct;
+  const ride = transaction.rideOption;
   const cartResult = transaction.cartResult;
   const constraints = transaction.constraints;
+
+  const handleAction = async (action: 'confirm' | 'add_to_cart' | 'cancel') => {
+    setIsLoading(true);
+    try {
+      if (action === 'confirm') {
+        onConfirm?.(transaction);
+      } else if (action === 'add_to_cart') {
+        onAddToCart?.(transaction, selectedSize);
+      } else {
+        onCancel?.(transaction);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ── RIDE BOOKING PREVIEW CARD ──
+  if (transaction.intent === 'ride_booking' || ride) {
+    const isAwaitingRideConfirm = transaction.state === 'AWAITING_CONFIRMATION';
+    const isRideCompleted = transaction.state === 'COMPLETED';
+
+    return (
+      <div className="my-3 rounded-2xl border border-sky-500/20 bg-gradient-to-b from-slate-900/95 to-slate-950/95 backdrop-blur-xl p-4 shadow-xl text-white space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
+              <Car className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                {ride?.platform || 'Ride'} Booking Preview
+              </span>
+              <div className="text-[10px] text-slate-400">
+                State: <span className="font-semibold text-sky-400">{transaction.state}</span>
+              </div>
+            </div>
+          </div>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+            <ShieldCheck className="w-3 h-3" />
+            VERIFIED FARE
+          </span>
+        </div>
+
+        {/* Pickup & Destination */}
+        <div className="space-y-2 text-xs">
+          <div className="flex items-start gap-2">
+            <MapPin className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+            <div>
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Pickup</span>
+              <p className="text-slate-200 font-medium">{ride?.pickupLocation.resolvedAddress || 'Current Location'}</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <Navigation className="w-3.5 h-3.5 text-sky-400 mt-0.5 shrink-0" />
+            <div>
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Destination</span>
+              <p className="text-slate-200 font-medium font-semibold">{ride?.destination?.resolvedAddress || ride?.destinationLocation?.resolvedAddress || 'Destination'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Fare & ETA */}
+        {ride && (
+          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+            <div>
+              <div className="text-[10px] text-slate-400">{ride.rideType}</div>
+              <div className="text-base font-bold text-emerald-400">₹{ride.estimatedFare}</div>
+            </div>
+            <div className="text-right">
+              <div className="flex items-center gap-1 text-xs text-sky-400 font-semibold justify-end">
+                <Clock className="w-3 h-3" />
+                {ride.etaMinutes} mins ETA
+              </div>
+              <div className="text-[10px] text-slate-400">Est. duration: {ride.estimatedDurationMinutes || 30} mins</div>
+            </div>
+          </div>
+        )}
+
+        {/* Ride Order Reference if completed */}
+        {isRideCompleted && transaction.orderOrBookingReference && (
+          <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Booking Confirmed! Reference: <strong>{transaction.orderOrBookingReference}</strong></span>
+          </div>
+        )}
+
+        {/* Ride Action Buttons */}
+        {!isRideCompleted && (
+          <div className="flex gap-2 justify-end pt-2 border-t border-slate-800/80">
+            <Button
+              onClick={() => handleAction('cancel')}
+              variant="outline"
+              disabled={isLoading}
+              className="border-slate-700 text-slate-300 hover:bg-slate-800 text-xs h-8 px-3 gap-1"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              Cancel
+            </Button>
+            {isAwaitingRideConfirm && (
+              <Button
+                onClick={() => handleAction('confirm')}
+                disabled={isLoading}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold h-8 px-3 gap-1.5 shadow-md shadow-emerald-500/20"
+              >
+                <Send className="w-3.5 h-3.5" />
+                Confirm & Book Ride
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (!product) {
     return (
@@ -65,21 +182,6 @@ export function TransactionPreviewCard({
   const isCartVerified = cartResult && cartResult.verified;
   const isAwaitingConfirmation = transaction.state === 'AWAITING_CONFIRMATION';
   const isCompleted = transaction.state === 'COMPLETED';
-
-  const handleAction = async (action: 'confirm' | 'add_to_cart' | 'cancel') => {
-    setIsLoading(true);
-    try {
-      if (action === 'confirm') {
-        onConfirm?.(transaction);
-      } else if (action === 'add_to_cart') {
-        onAddToCart?.(transaction, selectedSize);
-      } else {
-        onCancel?.(transaction);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   return (
     <div className="my-3 rounded-2xl border border-indigo-500/20 bg-gradient-to-b from-slate-900/95 to-slate-950/95 backdrop-blur-xl p-4 shadow-xl text-white space-y-3">

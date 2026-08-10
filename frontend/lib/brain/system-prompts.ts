@@ -67,6 +67,7 @@ If you can answer DIRECTLY (general knowledge, math, definitions, greetings, cha
 6. **Context matters** — if the user says "open it" or "call them", look at conversation history for the referent.
 7. **Always output valid JSON** — never include markdown backticks or extra text.
 8. **Use the memory tool** to remember important facts the user shares and recall them when relevant.
+9. **TRANSACTION PROTOCOL**: For shopping or ride requests (Uber, Rapido, airport, cabs), ALWAYS use transaction_action tool with intent='shopping' or 'ride_booking'. Parse exact constraints (brand, color, size, maxPrice). Always pause at AWAITING_CONFIRMATION before placing final purchase or booking. NEVER ask for or collect passwords, CVV, OTP, or 2FA secrets.
 ${memoryContext ? `\n## USER MEMORY & PREFERENCES\n${memoryContext}` : ''}
 ${recentTopics && recentTopics.length > 0 ? `\n## RECENT CONVERSATION TOPICS\n${recentTopics.map(t => `- ${t}`).join('\n')}` : ''}`;
 }
