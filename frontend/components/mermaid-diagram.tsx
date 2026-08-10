@@ -25,6 +25,12 @@ interface MermaidDiagramProps {
 
 let idCounter = 0;
 
+// Global render queue to serialize mermaid renders — prevents concurrent
+// mermaid.initialize() / render() calls that crash when loading full
+// conversation history with multiple diagrams simultaneously.
+let mermaidRenderQueue: Promise<void> = Promise.resolve();
+let mermaidInitialized = false;
+
 /**
  * Smart Sanitizer for Mermaid code:
  * 1. Strips code fences and normalises line endings
@@ -225,26 +231,34 @@ function MermaidDiagramComponent({ chart }: MermaidDiagramProps) {
     let isMounted = true;
 
     const renderDiagram = async () => {
-      try {
-        const mermaid = (await import('mermaid')).default;
+      // Queue this render to prevent concurrent mermaid operations
+      const renderPromise = new Promise<void>((resolve) => {
+        mermaidRenderQueue = mermaidRenderQueue.then(async () => {
+          if (!isMounted) { resolve(); return; }
+          try {
+            const mermaid = (await import('mermaid')).default;
 
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'loose',
-          theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
-          deterministicIds: true,
-          flowchart: {
-            htmlLabels: true,
-            curve: 'basis',
-            useMaxWidth: true,
-          },
-          sequence: {
-            useMaxWidth: true,
-          },
-          gantt: {
-            useMaxWidth: true,
-          },
-        });
+            // Initialize mermaid ONCE globally (not per-instance)
+            if (!mermaidInitialized) {
+              mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: 'loose',
+                theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
+                deterministicIds: true,
+                flowchart: {
+                  htmlLabels: true,
+                  curve: 'basis',
+                  useMaxWidth: true,
+                },
+                sequence: {
+                  useMaxWidth: true,
+                },
+                gantt: {
+                  useMaxWidth: true,
+                },
+              });
+              mermaidInitialized = true;
+            }
 
         let sanitized = sanitizeMermaidCode(chart);
         if (!sanitized || sanitized.length < 10) {
@@ -396,13 +410,16 @@ function MermaidDiagramComponent({ chart }: MermaidDiagramProps) {
           if (isMounted) setRenderState('error');
         }
       } catch (err) {
-        console.error('[MermaidDiagram] Final render failure:', err);
-        purgeAllMermaidErrors();
-        if (isMounted) {
-          setSvgContent('');
-          setRenderState('error');
+          console.error('[MermaidDiagram] Final render failure:', err);
+          purgeAllMermaidErrors();
+          if (isMounted) {
+            setSvgContent('');
+            setRenderState('error');
+          }
         }
-      }
+          resolve();
+        }).catch(() => { resolve(); });
+      });
     };
 
     if (chart && chart.trim().length > 5) {

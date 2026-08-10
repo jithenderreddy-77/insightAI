@@ -655,7 +655,7 @@ export default function Home() {
 
           // Save thread
           if (user && threadId) {
-            const finalMessages = [...messages, { role: 'user' as const, content: userMessage }, { role: 'assistant' as const, content: assistantContent }];
+            const finalMessages = [...messages, { role: 'user' as const, content: userMessage, attachments: currentAttachments.length > 0 ? currentAttachments : undefined }, { role: 'assistant' as const, content: assistantContent }];
             saveUserThread(user.id, { id: threadId, title: userMessage.slice(0, 60), messages: finalMessages, fileNames: files.map((f) => f.name), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
             setThreads(getUserThreads(user.id));
           }
@@ -873,6 +873,56 @@ export default function Home() {
         if (['.txt', '.csv', '.md', '.json', '.svg', '.html', '.xml'].includes(ext)) {
           return await f.text();
         }
+
+        // PPTX/DOCX: use JSZip on client for proper OOXML text extraction
+        if (ext === '.pptx' || ext === '.docx') {
+          try {
+            const JSZip = (await import('jszip')).default;
+            const ab = await f.arrayBuffer();
+            const zip = await JSZip.loadAsync(ab);
+            const textParts: string[] = [];
+
+            if (ext === '.pptx') {
+              const slideFiles = Object.keys(zip.files)
+                .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+                .sort((a, b) => {
+                  const nA = parseInt(a.match(/slide(\d+)/i)?.[1] || '0');
+                  const nB = parseInt(b.match(/slide(\d+)/i)?.[1] || '0');
+                  return nA - nB;
+                });
+              for (let i = 0; i < slideFiles.length; i++) {
+                const xml = await zip.file(slideFiles[i])?.async('string');
+                if (!xml) continue;
+                const paras = xml.split(/<\/a:p>/gi);
+                const lines: string[] = [];
+                for (const block of paras) {
+                  const runs = block.match(/<a:t>([^<]*)<\/a:t>/gi) || [];
+                  const line = runs.map((t) => t.replace(/<[^>]+>/g, '')).join(' ').trim();
+                  if (line) lines.push(line);
+                }
+                if (lines.length > 0) textParts.push(`--- Slide ${i + 1} ---\n${lines.join('\n')}`);
+              }
+            } else {
+              // DOCX
+              const docXml = await zip.file('word/document.xml')?.async('string');
+              if (docXml) {
+                const xmlBlocks = docXml.split(/<\/w:p>/gi);
+                for (const block of xmlBlocks) {
+                  const texts = block.match(/<w:t[^>]*>([^<]*)<\/w:t>/gi) || [];
+                  const line = texts.map((t) => t.replace(/<[^>]+>/g, '')).join('').trim();
+                  if (line) textParts.push(line);
+                }
+              }
+            }
+
+            if (textParts.join('').trim().length > 10) {
+              return textParts.join('\n');
+            }
+          } catch {
+            // Fall through to binary extraction
+          }
+        }
+
         try {
           const ab = await f.arrayBuffer();
           const bytes = new Uint8Array(ab);
@@ -894,6 +944,7 @@ export default function Home() {
           return `Document: ${f.name}\nUploaded ${f.name} for AI context analysis.`;
         }
       };
+
 
       // Process each file (small or huge up to 2GB)
       for (const file of selectedFiles) {

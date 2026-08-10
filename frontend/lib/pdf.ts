@@ -1,6 +1,7 @@
 import { PDFLoader } from '@langchain/community/document_loaders/fs/pdf';
 import { Document } from '@langchain/core/documents';
 import { parseSpreadsheet, isSpreadsheetFile, SpreadsheetParseError } from './spreadsheet-parser';
+import JSZip from 'jszip';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -153,38 +154,160 @@ async function processTextFile(file: File): Promise<Document[]> {
 
 /**
  * Processes DOC/DOCX files.
+ * For .docx (OOXML ZIP): extracts text from word/document.xml via <w:t> tags.
+ * For .doc (legacy binary): falls back to printable-ASCII extraction.
  */
 async function processDocFile(file: File): Promise<Document[]> {
+  const extension = getFileExtension(file.name).toLowerCase();
   const buffer = await bufferFile(file);
+
+  // DOCX = ZIP archive — extract structured text from XML
+  if (extension === '.docx') {
+    try {
+      const zip = await JSZip.loadAsync(buffer);
+      const docXml = await zip.file('word/document.xml')?.async('string');
+      if (docXml) {
+        // Extract all <w:t> (Word text run) content
+        const textMatches = docXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/gi) || [];
+        const paragraphs: string[] = [];
+        let currentParagraph = '';
+
+        // Split by paragraph markers to preserve structure
+        const xmlLines = docXml.split(/<\/w:p>/gi);
+        for (const xmlBlock of xmlLines) {
+          const blockTexts = xmlBlock.match(/<w:t[^>]*>([^<]*)<\/w:t>/gi) || [];
+          const lineText = blockTexts
+            .map((t) => t.replace(/<[^>]+>/g, ''))
+            .join('')
+            .trim();
+          if (lineText) {
+            paragraphs.push(lineText);
+          }
+        }
+
+        const fullText = paragraphs.join('\n');
+        if (fullText.trim().length > 10) {
+          return [
+            new Document({
+              pageContent: cleanText(fullText),
+              metadata: { filename: file.name, source: file.name },
+            }),
+          ];
+        }
+      }
+    } catch (zipErr) {
+      console.log(`[DOCX Parser] JSZip extraction fallback for ${file.name}:`, zipErr);
+    }
+  }
+
+  // Fallback for legacy .doc or failed .docx parsing
   const rawText = extractTextFromBuffer(buffer, file.name);
   const cleaned = cleanText(rawText);
 
   return [
     new Document({
       pageContent: cleaned || `Document: ${file.name}\nExtracted text content from Word document.`,
-      metadata: {
-        filename: file.name,
-        source: file.name,
-      },
+      metadata: { filename: file.name, source: file.name },
     }),
   ];
 }
 
 /**
  * Processes PPT/PPTX PowerPoint presentation files.
+ * For .pptx (OOXML ZIP): extracts text from ppt/slides/slide*.xml via <a:t> tags.
+ * For .ppt (legacy binary): falls back to printable-ASCII extraction.
  */
 async function processPPTFile(file: File): Promise<Document[]> {
+  const extension = getFileExtension(file.name).toLowerCase();
   const buffer = await bufferFile(file);
+
+  // PPTX = ZIP archive — extract structured slide text from XML
+  if (extension === '.pptx') {
+    try {
+      const zip = await JSZip.loadAsync(buffer);
+      const docs: Document[] = [];
+
+      // Enumerate slide files: ppt/slides/slide1.xml, slide2.xml, ...
+      const slideFiles = Object.keys(zip.files)
+        .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/slide(\d+)/i)?.[1] || '0');
+          const numB = parseInt(b.match(/slide(\d+)/i)?.[1] || '0');
+          return numA - numB;
+        });
+
+      for (let i = 0; i < slideFiles.length; i++) {
+        const slideXml = await zip.file(slideFiles[i])?.async('string');
+        if (!slideXml) continue;
+
+        // Extract all <a:t> (DrawingML text run) content, preserving paragraph breaks
+        const paragraphs: string[] = [];
+        const paraBlocks = slideXml.split(/<\/a:p>/gi);
+        for (const block of paraBlocks) {
+          const textRuns = block.match(/<a:t>([^<]*)<\/a:t>/gi) || [];
+          const lineText = textRuns
+            .map((t) => t.replace(/<[^>]+>/g, ''))
+            .join(' ')
+            .trim();
+          if (lineText) {
+            paragraphs.push(lineText);
+          }
+        }
+
+        const slideText = paragraphs.join('\n').trim();
+        if (slideText.length > 0) {
+          docs.push(
+            new Document({
+              pageContent: cleanText(`--- Slide ${i + 1} ---\n${slideText}`),
+              metadata: {
+                filename: file.name,
+                source: file.name,
+                slideNumber: i + 1,
+                totalSlides: slideFiles.length,
+              },
+            }),
+          );
+        }
+      }
+
+      // Also extract notes from ppt/notesSlides/ if present
+      const notesFiles = Object.keys(zip.files)
+        .filter((name) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/i.test(name))
+        .sort();
+      for (const notesFile of notesFiles) {
+        const notesXml = await zip.file(notesFile)?.async('string');
+        if (!notesXml) continue;
+        const notesTexts = notesXml.match(/<a:t>([^<]*)<\/a:t>/gi) || [];
+        const notesText = notesTexts
+          .map((t) => t.replace(/<[^>]+>/g, ''))
+          .join(' ')
+          .trim();
+        if (notesText.length > 10) {
+          docs.push(
+            new Document({
+              pageContent: cleanText(`--- Speaker Notes ---\n${notesText}`),
+              metadata: { filename: file.name, source: file.name, isNotes: true },
+            }),
+          );
+        }
+      }
+
+      if (docs.length > 0) {
+        return docs;
+      }
+    } catch (zipErr) {
+      console.log(`[PPTX Parser] JSZip extraction fallback for ${file.name}:`, zipErr);
+    }
+  }
+
+  // Fallback for legacy .ppt or failed .pptx parsing
   const rawText = extractTextFromBuffer(buffer, file.name);
   const cleaned = cleanText(rawText);
 
   return [
     new Document({
       pageContent: cleaned || `PowerPoint Presentation: ${file.name}\nExtracted slide content from presentation file.`,
-      metadata: {
-        filename: file.name,
-        source: file.name,
-      },
+      metadata: { filename: file.name, source: file.name },
     }),
   ];
 }
@@ -349,7 +472,8 @@ function cleanText(text: string): string {
   if (!text) return '';
   return text
     .replace(/\t/g, ' ')
-    .replace(/[^\x20-\x7E\n\r]/g, '')
+    // Remove control characters but preserve Unicode (accented, math, currency symbols, etc.)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
