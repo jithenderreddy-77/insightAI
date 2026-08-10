@@ -1166,6 +1166,21 @@ export function VoiceAssistantModal({
             else if (a === 'open_history') { onOpenHistory(); }
             else if (a === 'open_auth') { onOpenAuth(); }
             else if (a === 'install_app') { onInstallApp(); }
+          } else if (data.actionType === 'SHOPPING' || data.transaction) {
+            const tx = data.transaction;
+            const payload = data.transactionPayload || {};
+            const platform = tx?.platform || 'Amazon';
+            const url = payload.url || payload.cartUrl || (platform === 'Flipkart' ? 'https://www.flipkart.com' : 'https://www.amazon.in');
+            const nativeScheme = platform === 'Flipkart' ? 'flipkart://' : 'amazon://';
+
+            setActionNotice(`🛒 ${platform}: ${tx?.state || 'Processing'}`);
+            safeOpenUrl(url, nativeScheme, platform);
+
+            // Also post message to main chat window so the TransactionPreviewCard is visible
+            if (onSendChatMessage) {
+              const previewMarker = tx ? `\n\n<!--TRANSACTION_PREVIEW:${JSON.stringify(tx)}-->` : '';
+              onSendChatMessage(`${spokenTranscript}${previewMarker}`);
+            }
           } else if (data.actionType === 'DOCUMENT_QA') {
             // Route to the chat pipeline for full RAG response
             try {

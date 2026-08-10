@@ -11,6 +11,8 @@ import { MermaidDiagram } from '@/components/mermaid-diagram';
 import { DataChart } from '@/components/data-chart';
 import { ScientificReport } from '@/components/scientific-report';
 import type { ScientificReportData } from '@/components/scientific-report';
+import { TransactionPreviewCard } from '@/components/transaction-preview-card';
+import type { TransactionRecord } from '@/lib/brain/transaction-agent/types';
 import { ChatAttachment } from '@/lib/history-store';
 import {
   Accordion,
@@ -19,13 +21,17 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion';
 
-interface ChatMessageProps {
+export interface ChatMessageProps {
   message: {
     role: 'user' | 'assistant';
     content: string;
     sources?: PDFDocument[];
     attachments?: ChatAttachment[];
+    transaction?: TransactionRecord;
   };
+  onTransactionConfirm?: (tx: TransactionRecord) => void;
+  onTransactionAddToCart?: (tx: TransactionRecord, size?: string) => void;
+  onTransactionCancel?: (tx: TransactionRecord) => void;
 }
 
 /**
@@ -78,20 +84,30 @@ function preprocessMermaidContent(content: string): string {
   return processed;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onTransactionConfirm, onTransactionAddToCart, onTransactionCancel }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const isLoading = message.role === 'assistant' && message.content === '';
 
-  // Extract chart data from <!--CHART_DATA:...-->  and scientific reports from <!--SCIENTIFIC_REPORT:...--> markers
-  const { displayContent, chartData, scientificReport } = useMemo(() => {
+  // Extract chart data, scientific reports, and transaction previews from markers
+  const { displayContent, chartData, scientificReport, transactionData } = useMemo(() => {
     if (message.role !== 'assistant' || !message.content) {
-      return { displayContent: message.content, chartData: null, scientificReport: null };
+      return { displayContent: message.content, chartData: null, scientificReport: null, transactionData: message.transaction || null };
     }
 
     let content = message.content;
     let chart = null;
     let sciReport: ScientificReportData | null = null;
+    let txRecord: TransactionRecord | null = message.transaction || null;
+
+    // Extract transaction preview marker
+    const txMatch = content.match(/<!--TRANSACTION_PREVIEW:([\s\S]*?)-->/);
+    if (txMatch) {
+      try {
+        txRecord = JSON.parse(txMatch[1]);
+      } catch { /* ignore malformed transaction marker */ }
+      content = content.replace(/<!--TRANSACTION_PREVIEW:[\s\S]*?-->/, '').trim();
+    }
 
     // Extract scientific report
     const sciMatch = content.match(/<!--SCIENTIFIC_REPORT:([\s\S]*?)-->/);
@@ -111,8 +127,8 @@ export function ChatMessage({ message }: ChatMessageProps) {
       content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
     }
 
-    return { displayContent: content, chartData: chart, scientificReport: sciReport };
-  }, [message.content, message.role]);
+    return { displayContent: content, chartData: chart, scientificReport: sciReport, transactionData: txRecord };
+  }, [message.content, message.role, message.transaction]);
 
   const handleCopy = async () => {
     try {
@@ -323,6 +339,16 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 {/* Render Scientific Report if scientific analysis data is present */}
                 {scientificReport && (
                   <ScientificReport data={scientificReport} />
+                )}
+
+                {/* Render Transaction Preview Card if active transaction data is present */}
+                {transactionData && (
+                  <TransactionPreviewCard
+                    transaction={transactionData}
+                    onConfirm={onTransactionConfirm}
+                    onAddToCart={onTransactionAddToCart}
+                    onCancel={onTransactionCancel}
+                  />
                 )}
               </div>
             )}

@@ -361,6 +361,10 @@ function parseDecision(raw: string): LLMToolDecision | null {
  * with the existing voice-assistant-modal.tsx rendering logic.
  */
 function mapToolToActionType(toolName: string, result: ToolResult): string {
+  if (toolName === 'transaction_action') {
+    return 'SHOPPING';
+  }
+
   if (!result.clientAction) {
     return 'KNOWLEDGE_ANSWER';
   }
@@ -396,6 +400,11 @@ function flattenToolResult(
 ): Record<string, any> {
   const flat: Record<string, any> = {};
   const payload = result.clientAction?.payload || {};
+
+  if (toolName === 'transaction_action' || result.data?.transaction) {
+    flat.transaction = result.data?.transaction;
+    flat.transactionPayload = payload;
+  }
 
   switch (result.clientAction?.type) {
     case 'OPEN_URL':

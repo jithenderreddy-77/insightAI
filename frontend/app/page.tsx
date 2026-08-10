@@ -498,10 +498,52 @@ export default function Home() {
     // --- Detect spreadsheet analytical queries ---
     const spreadsheetFileNames = Object.keys(spreadsheetSessions);
     const hasSpreadsheet = spreadsheetFileNames.length > 0;
-    // Route to spreadsheet code-gen agent whenever a spreadsheet is active in session
     const isAnalyticalQuery = hasSpreadsheet;
 
+    // --- Detect Transaction / Shopping Queries ---
+    const lowerUserMsg = userMessage.toLowerCase();
+    const isShoppingQuery =
+      lowerUserMsg.includes('shoes') ||
+      lowerUserMsg.includes('cart') ||
+      lowerUserMsg.includes('under ₹') ||
+      lowerUserMsg.includes('under rs') ||
+      lowerUserMsg.includes('size ') ||
+      (lowerUserMsg.includes('buy') && (lowerUserMsg.includes('nike') || lowerUserMsg.includes('puma') || lowerUserMsg.includes('ssd'))) ||
+      (lowerUserMsg.includes('find') && (lowerUserMsg.includes('shoes') || lowerUserMsg.includes('black') || lowerUserMsg.includes('under')));
+
     try {
+      if (isShoppingQuery) {
+        const response = await fetch('/api/voice-assistant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcript: userMessage,
+            hasActiveDocuments: files.length > 0,
+            history: messages.map(m => ({ role: m.role, content: m.content })),
+          }),
+          signal: abortController.signal,
+        });
+
+        const result = await response.json();
+        let assistantContent = result.spokenResponse || 'Processed your request.';
+
+        if (result.transaction) {
+          assistantContent += `\n\n<!--TRANSACTION_PREVIEW:${JSON.stringify(result.transaction)}-->`;
+        }
+
+        setMessages((prev) => {
+          const newArr = [...prev];
+          if (newArr.length > 0 && newArr[newArr.length - 1].role === 'assistant') {
+            newArr[newArr.length - 1].content = assistantContent;
+          }
+          return newArr;
+        });
+
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        return;
+      }
+
       // --- SPREADSHEET ANALYTICS PATH ---
       if (isAnalyticalQuery) {
         const firstFile = spreadsheetFileNames[0];
