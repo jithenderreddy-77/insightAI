@@ -186,9 +186,37 @@ export function VoiceAssistantModal({
 
   const [pendingLaunchUrl, setPendingLaunchUrl] = useState<{ url: string; label: string } | null>(null);
 
+  // --- PRE-OPENED WINDOW REF & HANDLERS FOR POP-UP BLOCKED FIX ---
+  // Browser security blocks window.open() when called asynchronously after STT + LLM pipeline completes.
+  // Fix: Synchronously pre-open a blank tab during initial gesture / command start, then set location.href once URL is known.
+  const preOpenedWindowRef = useRef<Window | null>(null);
+
+  const preOpenBlankWindow = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
+        try { preOpenedWindowRef.current.close(); } catch {}
+      }
+      const win = window.open('about:blank', '_blank');
+      preOpenedWindowRef.current = win;
+    } catch {
+      preOpenedWindowRef.current = null;
+    }
+  }, []);
+
+  const cleanupPreOpenedWindow = useCallback(() => {
+    if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
+      try { preOpenedWindowRef.current.close(); } catch {}
+    }
+    preOpenedWindowRef.current = null;
+  }, []);
+
   // --- NATIVE APP LAUNCHER & NEW TAB WEB FALLBACK (NEVER REPLACES INSIGHT TAB) ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
-    if (typeof window === 'undefined' || !webUrl) return;
+    if (typeof window === 'undefined' || !webUrl) {
+      cleanupPreOpenedWindow();
+      return;
+    }
 
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
     setPendingLaunchUrl({ url: webUrl, label });
@@ -209,13 +237,26 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Open in NEW TAB ONLY (_blank) — NEVER overwrite active Insight working tab!
+    // 2. Open in NEW TAB ONLY (_blank) — Using pre-opened window reference to eliminate pop-up blocked warnings!
+    const preOpenedWin = preOpenedWindowRef.current;
+    preOpenedWindowRef.current = null; // Consume reference
+
+    if (preOpenedWin && !preOpenedWin.closed) {
+      try {
+        preOpenedWin.location.href = webUrl;
+        return;
+      } catch (err) {
+        console.warn('[Pop-up Fix] Failed to navigate pre-opened tab, using window.open fallback:', err);
+      }
+    }
+
+    // Fallback for direct user click handlers or if pre-opened window reference was unavailable
     try {
       window.open(webUrl, '_blank', 'noopener,noreferrer');
-    } catch {
-      // If browser popup blocker intercepts, the 1-Click Launch Card in UI allows opening in a new tab!
+    } catch (e) {
+      console.warn('[Pop-up Fix] window.open intercepted by browser pop-up blocker:', e);
     }
-  }, []);
+  }, [cleanupPreOpenedWindow]);
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1099,6 +1140,11 @@ export function VoiceAssistantModal({
       isProcessingRef.current = true;
       shouldRestartRef.current = false;
 
+      // PRE-OPEN BLANK TAB synchronously while browser still considers this a user gesture.
+      // If the command results in opening a URL, safeOpenUrl() will navigate this tab.
+      // If not (e.g. knowledge answer, math, weather), cleanupPreOpenedWindow() closes it in finally.
+      preOpenBlankWindow();
+
       setAssistantState('thinking');
       setActionNotice(null);
       setCommandLog((prev) => [...prev.slice(-4), spokenTranscript]);
@@ -1239,10 +1285,12 @@ export function VoiceAssistantModal({
         console.error('Voice command error:', err);
         speakVoiceResponse('Sorry, there was an issue. Please try again.');
       } finally {
+        // Close pre-opened blank tab if no URL navigation consumed it (e.g. knowledge answer, time query)
+        cleanupPreOpenedWindow();
         isProcessingRef.current = false;
       }
     },
-    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
+    [hasActiveDocuments, matchClientInstantAction, preOpenBlankWindow, cleanupPreOpenedWindow, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
   );
 
   // --- SPEECH RECOGNITION INIT (Optimized for Laptop & Mobile browsers) ---
