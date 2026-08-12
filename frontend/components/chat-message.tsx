@@ -326,15 +326,38 @@ export function ChatMessage({ message, onTransactionConfirm, onTransactionAddToC
                   {preprocessMermaidContent(displayContent)}
                 </ReactMarkdown>
 
-                {/* Render Chart.js visualization if chart data is present */}
-                {chartData && chartData.type && chartData.labels && chartData.datasets && (
-                  <DataChart
-                    type={chartData.type}
-                    labels={chartData.labels}
-                    datasets={chartData.datasets}
-                    title={chartData.title}
-                  />
-                )}
+                {/* Render Chart.js visualization(s) if chart data is present */}
+                {(() => {
+                  if (!chartData) return null;
+                  const chartList = Array.isArray(chartData) ? chartData : [chartData];
+                  const validCharts = chartList.filter((c: any) => c && (c.failed || (c.type && (c.labels || c.datasets))));
+                  if (validCharts.length === 0) return null;
+
+                  return (
+                    <div className={`my-4 ${validCharts.length > 1 ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : 'flex flex-col gap-4'}`}>
+                      {validCharts.map((c: any, idx: number) => {
+                        const key = c.id || `chart-${c.type}-${c.title?.replace(/\s+/g, '-') || idx}`;
+                        return (
+                          <DataChart
+                            key={key}
+                            id={key}
+                            type={c.type || 'bar'}
+                            labels={c.labels || []}
+                            datasets={c.datasets || []}
+                            title={c.title}
+                            code={c.code}
+                            executionTimeMs={c.executionTimeMs}
+                            reasoning={c.reasoning}
+                            failed={c.failed}
+                            error={c.error}
+                            xAxisLabel={c.xAxisLabel}
+                            yAxisLabel={c.yAxisLabel}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
 
                 {/* Render Scientific Report if scientific analysis data is present */}
                 {scientificReport && (

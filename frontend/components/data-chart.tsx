@@ -23,7 +23,7 @@ import {
   Filler,
 } from 'chart.js';
 import { Bar, Line, Pie, Doughnut, Scatter, Radar } from 'react-chartjs-2';
-import { Download, Table } from 'lucide-react';
+import { Download, Table, Code2, ChevronDown, AlertTriangle } from 'lucide-react';
 
 // Register Chart.js components
 ChartJS.register(
@@ -53,10 +53,16 @@ export interface HeatmapMatrixData {
 }
 
 export interface DataChartProps {
+  id?: string;
   type: 'bar' | 'line' | 'pie' | 'doughnut' | 'scatter' | 'radar' | 'area' | 'heatmap';
   labels?: string[];
   datasets?: ChartDataset[];
   title?: string;
+  code?: string;
+  executionTimeMs?: number;
+  reasoning?: string;
+  failed?: boolean;
+  error?: string;
   /** Callback when user clicks a data point */
   onPointClick?: (label: string, value: number, datasetLabel: string) => void;
   /** Scientific axis labels */
@@ -71,7 +77,7 @@ export interface DataChartProps {
   matrixData?: HeatmapMatrixData;
 }
 
-// Premium color palette
+// Premium glassmorphism & dark-mode complementary color palette
 const CHART_COLORS = [
   'rgba(99, 102, 241, 0.85)',   // Indigo
   'rgba(236, 72, 153, 0.85)',   // Pink
@@ -81,6 +87,8 @@ const CHART_COLORS = [
   'rgba(168, 85, 247, 0.85)',   // Purple
   'rgba(239, 68, 68, 0.85)',    // Red
   'rgba(20, 184, 166, 0.85)',   // Teal
+  'rgba(249, 115, 22, 0.85)',   // Orange
+  'rgba(6, 182, 212, 0.85)',    // Cyan
 ];
 
 const CHART_BORDERS = [
@@ -92,11 +100,43 @@ const CHART_BORDERS = [
   'rgba(168, 85, 247, 1)',
   'rgba(239, 68, 68, 1)',
   'rgba(20, 184, 166, 1)',
+  'rgba(249, 115, 22, 1)',
+  'rgba(6, 182, 212, 1)',
 ];
 
-export function DataChart({ type, labels = [], datasets = [], title, onPointClick, xAxisLabel, yAxisLabel, xUnit, yUnit, scientificType, matrixData }: DataChartProps) {
+export function DataChart({
+  type,
+  labels = [],
+  datasets = [],
+  title,
+  code,
+  executionTimeMs,
+  reasoning,
+  failed,
+  error,
+  onPointClick,
+  xAxisLabel,
+  yAxisLabel,
+  xUnit,
+  yUnit,
+  scientificType,
+  matrixData,
+}: DataChartProps) {
   const chartRef = useRef<any>(null);
   const isScientific = !!(xAxisLabel || yAxisLabel || scientificType);
+
+  // Render failure notice if execution of this chart failed
+  if (failed) {
+    return (
+      <div className="my-3 rounded-2xl border border-rose-200/80 dark:border-rose-900/40 bg-rose-50/60 dark:bg-rose-950/20 backdrop-blur-xl p-4 shadow-sm">
+        <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 text-xs font-semibold mb-1">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Couldn't generate the {type || 'visualization'} — {title || 'Error'}</span>
+        </div>
+        <p className="text-[11px] text-slate-600 dark:text-slate-400 font-mono mt-1">{error || 'Execution failed for this visualization.'}</p>
+      </div>
+    );
+  }
 
   // Render Heatmap Matrix if type === 'heatmap'
   if (type === 'heatmap' && matrixData && matrixData.columns && matrixData.matrix) {
@@ -129,7 +169,6 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
                     {matrixData.columns[ri]}
                   </td>
                   {row.map((val, ci) => {
-                    // Color scale: -1 (deep blue/red) to 0 (white) to 1 (deep indigo/emerald)
                     let bgStyle = '';
                     if (val > 0) {
                       bgStyle = `rgba(99, 102, 241, ${Math.abs(val) * 0.7 + 0.1})`;
@@ -157,28 +196,35 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
     );
   }
 
-  // Apply colors to datasets
-  const coloredDatasets = datasets.map((ds, i) => ({
-    ...ds,
-    backgroundColor: ds.backgroundColor || (
-      type === 'pie' || type === 'doughnut'
+  // Apply colorful styling to datasets (multi-color categorical palette for bar, pie, doughnut)
+  const coloredDatasets = datasets.map((ds, i) => {
+    const isCategoricalMultiColor = type === 'pie' || type === 'doughnut' || (type === 'bar' && datasets.length === 1);
+    const bgColors = ds.backgroundColor || (
+      isCategoricalMultiColor
         ? CHART_COLORS.slice(0, labels.length)
         : type === 'area'
-        ? 'rgba(99, 102, 241, 0.2)'
+        ? 'rgba(99, 102, 241, 0.15)'
         : CHART_COLORS[i % CHART_COLORS.length]
-    ),
-    borderColor: ds.borderColor || (
-      type === 'pie' || type === 'doughnut'
+    );
+
+    const borderColors = ds.borderColor || (
+      isCategoricalMultiColor
         ? CHART_BORDERS.slice(0, labels.length)
         : CHART_BORDERS[i % CHART_BORDERS.length]
-    ),
-    borderWidth: type === 'pie' || type === 'doughnut' ? 2 : 2,
-    borderRadius: type === 'bar' ? 6 : 0,
-    tension: type === 'line' || type === 'area' ? 0.4 : 0,
-    fill: type === 'area' ? 'origin' : false,
-    pointRadius: type === 'line' || type === 'area' || type === 'scatter' ? 4 : 0,
-    pointHoverRadius: 7,
-  }));
+    );
+
+    return {
+      ...ds,
+      backgroundColor: bgColors,
+      borderColor: borderColors,
+      borderWidth: isCategoricalMultiColor ? 2 : 2,
+      borderRadius: type === 'bar' ? 6 : 0,
+      tension: type === 'line' || type === 'area' ? 0.35 : 0,
+      fill: type === 'area' ? 'origin' : false,
+      pointRadius: type === 'line' || type === 'area' || type === 'scatter' ? 4 : 0,
+      pointHoverRadius: 7,
+    };
+  });
 
   const chartData = { labels, datasets: coloredDatasets };
 
@@ -189,9 +235,9 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
       title: {
         display: !!title,
         text: title || '',
-        font: { size: 14, weight: '600' as const, family: "'Inter', sans-serif" },
+        font: { size: 13, weight: '600' as const, family: "'Inter', sans-serif" },
         color: '#6366f1',
-        padding: { bottom: 16 },
+        padding: { bottom: 14 },
       },
       legend: {
         display: datasets.length > 1 || type === 'pie' || type === 'doughnut' || type === 'radar',
@@ -227,7 +273,7 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
         title: {
           display: !!(xAxisLabel || xUnit),
           text: xAxisLabel ? (xUnit ? `${xAxisLabel} (${xUnit})` : xAxisLabel) : (xUnit || ''),
-          font: { size: 12, weight: '600' as const, family: "'Inter', sans-serif" },
+          font: { size: 11, weight: '600' as const, family: "'Inter', sans-serif" },
           color: isScientific ? '#6366f1' : undefined,
         },
         ticks: {
@@ -240,7 +286,7 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
         title: {
           display: !!(yAxisLabel || yUnit),
           text: yAxisLabel ? (yUnit ? `${yAxisLabel} (${yUnit})` : yAxisLabel) : (yUnit || ''),
-          font: { size: 12, weight: '600' as const, family: "'Inter', sans-serif" },
+          font: { size: 11, weight: '600' as const, family: "'Inter', sans-serif" },
           color: isScientific ? '#6366f1' : undefined,
         },
         ticks: { font: { size: 10, family: "'Inter', sans-serif" } },
@@ -276,7 +322,7 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
           <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-            {isScientific ? `${scientificType || 'Scientific'} Visualization` : 'Data Visualization'}
+            {isScientific ? `${scientificType || 'Scientific'} Visualization` : `${type.toUpperCase()} CHART`}
           </span>
         </div>
         <button
@@ -287,9 +333,32 @@ export function DataChart({ type, labels = [], datasets = [], title, onPointClic
           PNG
         </button>
       </div>
-      <div className="h-[300px] w-full">
+      <div className="h-[280px] w-full">
         <ChartComponent ref={chartRef} data={chartData} options={commonOptions} />
       </div>
+
+      {/* Individual Trust Layer / Reasoning Panel */}
+      {(code || reasoning) && (
+        <div className="mt-3 border-t border-slate-100 dark:border-slate-800/80 pt-2 text-xs">
+          <details className="group">
+            <summary className="cursor-pointer font-medium text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 flex items-center justify-between text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <Code2 className="w-3.5 h-3.5" />
+                <span>Show reasoning {executionTimeMs ? `(${executionTimeMs}ms)` : ''}</span>
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="mt-2 space-y-2 text-[11px] text-slate-600 dark:text-slate-300">
+              {reasoning && <p className="italic bg-indigo-50/50 dark:bg-indigo-950/30 p-2 rounded-lg border border-indigo-100/50 dark:border-indigo-900/30">{reasoning}</p>}
+              {code && (
+                <pre className="p-2.5 rounded-xl bg-slate-900 text-slate-100 font-mono text-[10.5px] overflow-x-auto">
+                  <code>{code}</code>
+                </pre>
+              )}
+            </div>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

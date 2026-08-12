@@ -79,8 +79,9 @@ export function executeSandboxed(
       // The dataset
       data: Object.freeze(data.map((row) => ({ ...row }))), // shallow-freeze rows
 
-      // Result placeholder — code must assign to this
+      // Result placeholders — code can assign to result or chartResult
       result: undefined,
+      chartResult: undefined,
 
       // Safe built-in constructors and functions
       Math,
@@ -138,8 +139,8 @@ export function executeSandboxed(
 
     const executionTimeMs = Date.now() - startTime;
 
-    // Extract result
-    const result = sandbox.result;
+    // Extract result (check result or chartResult)
+    const result = sandbox.result !== undefined ? sandbox.result : sandbox.chartResult;
 
     // Safety: check result size
     try {

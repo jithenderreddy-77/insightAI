@@ -110,10 +110,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Extract code from the LLM response
+    // Extract code, explanation, and chart specs from the LLM response
     let code = extractCode(llmResponse);
     let explanation = extractExplanation(llmResponse);
-    let chartSpec = extractChartSpec(llmResponse);
+    let rawChartSpecs = extractChartSpecs(llmResponse);
 
     if (!code) {
       return NextResponse.json({
@@ -125,10 +125,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // --- EXECUTE in sandbox ---
+    // --- EXECUTE main query in sandbox ---
     let sandboxResult = executeSandboxed(code, sheetData.rows);
 
-    // --- SELF-CORRECTION: If execution failed, feed error back to LLM and retry once ---
+    // --- SELF-CORRECTION: If main query execution failed, retry once ---
     if (!sandboxResult.success && sandboxResult.error) {
       const retryPrompt = buildRetryPrompt(
         schemaPrompt,
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
         if (retryCode) {
           code = retryCode;
           explanation = extractExplanation(retryResponse) || explanation;
-          chartSpec = extractChartSpec(retryResponse) || chartSpec;
+          rawChartSpecs = extractChartSpecs(retryResponse).length > 0 ? extractChartSpecs(retryResponse) : rawChartSpecs;
           sandboxResult = executeSandboxed(retryCode, sheetData.rows);
         }
       }
@@ -161,13 +161,22 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Process all chart specs independently (sandbox execution per chart)
+    const processedCharts = await processChartSpecs(
+      rawChartSpecs,
+      sheetData.rows,
+      sheetData.headers,
+      nvidiaApiKey,
+      openaiApiKey,
+    );
+
     return NextResponse.json({
       type: 'answer',
       result: sandboxResult.result,
       explanation: explanation || 'Analysis computed successfully.',
       code: sandboxResult.code,
       executionTimeMs: sandboxResult.executionTimeMs,
-      chartData: chartSpec,
+      chartData: processedCharts.length > 0 ? processedCharts : null,
     });
   } catch (error: any) {
     console.error('[spreadsheet-query] Unhandled error:', error);
@@ -179,8 +188,120 @@ export async function POST(req: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
-// LLM Communication
+// LLM Communication & Multi-Chart Processing
 // ---------------------------------------------------------------------------
+
+async function processChartSpecs(
+  rawSpecs: any[],
+  rows: Record<string, unknown>[],
+  headers: string[],
+  nvidiaApiKey?: string,
+  openaiApiKey?: string,
+): Promise<any[]> {
+  const specs = (Array.isArray(rawSpecs) ? rawSpecs : rawSpecs ? [rawSpecs] : []).slice(0, 4);
+  const processedCharts: any[] = [];
+
+  for (let idx = 0; idx < specs.length; idx++) {
+    const spec = specs[idx];
+    if (!spec || typeof spec !== 'object') continue;
+
+    const chartId = spec.id || `chart_${idx + 1}`;
+    const chartType = spec.type || 'bar';
+    const title = spec.title || `Chart ${idx + 1}`;
+    const xAxisLabel = spec.xAxisLabel || '';
+    const yAxisLabel = spec.yAxisLabel || '';
+    const reasoning = spec.reasoning || '';
+    let chartCode = spec.code || '';
+    let labels: string[] = Array.isArray(spec.labels) ? spec.labels : [];
+    let datasets: any[] = Array.isArray(spec.datasets) ? spec.datasets : [];
+    let failed = false;
+    let errorMsg = '';
+    let executionTimeMs = 0;
+
+    // If code is provided and labels/datasets are empty, execute code in sandbox
+    if (chartCode && (labels.length === 0 || datasets.length === 0)) {
+      let res = executeSandboxed(chartCode, rows);
+      executionTimeMs = res.executionTimeMs;
+
+      // Self-correction retry once if chart execution failed
+      if (!res.success && res.error) {
+        const retryPrompt = `Fix the following JS chart computation code. SPREADSHEET HEADERS: ${JSON.stringify(headers)}.
+FAILED CODE:
+\`\`\`javascript
+${chartCode}
+\`\`\`
+ERROR: ${res.error}
+Assign the result object to \`chartResult\` with structure { labels: string[], datasets: [{ label: string, data: number[] }] }.
+Return ONLY the code inside a \`\`\`javascript ... \`\`\` block.`;
+        const retryCodeRaw = await callLLM(retryPrompt, 'Fix chart code', nvidiaApiKey, openaiApiKey);
+        if (retryCodeRaw) {
+          const fixedCode = extractCode(retryCodeRaw);
+          if (fixedCode) {
+            chartCode = fixedCode;
+            res = executeSandboxed(fixedCode, rows);
+            executionTimeMs = res.executionTimeMs;
+          }
+        }
+      }
+
+      if (!res.success) {
+        failed = true;
+        errorMsg = res.error || 'Chart execution failed.';
+      } else {
+        // Extract labels & datasets from res.result
+        const resVal: any = res.result;
+        if (resVal && typeof resVal === 'object') {
+          if (Array.isArray(resVal.labels) && Array.isArray(resVal.datasets)) {
+            labels = resVal.labels;
+            datasets = resVal.datasets;
+          } else if (Array.isArray(resVal)) {
+            // Convert array of objects [{ Category: 'A', Value: 10 }] into chart labels and data
+            const firstRow = resVal[0] || {};
+            const keys = Object.keys(firstRow);
+            if (keys.length >= 2) {
+              const labelKey = keys[0];
+              const valueKey = keys[1];
+              labels = resVal.map((r: any) => String(r[labelKey] ?? ''));
+              datasets = [
+                {
+                  label: valueKey,
+                  data: resVal.map((r: any) => Number(r[valueKey]) || 0),
+                },
+              ];
+            }
+          }
+        }
+      }
+    }
+
+    // If no datasets created yet and not failed, create default if labels & data present
+    if (!failed && datasets.length === 0 && labels.length > 0 && Array.isArray(spec.data)) {
+      datasets = [
+        {
+          label: yAxisLabel || title || 'Value',
+          data: spec.data.map((v: any) => Number(v) || 0),
+        },
+      ];
+    }
+
+    processedCharts.push({
+      id: chartId,
+      type: chartType,
+      title,
+      labels,
+      datasets,
+      code: chartCode,
+      executionTimeMs,
+      reasoning,
+      failed,
+      error: errorMsg,
+      xAxisLabel,
+      yAxisLabel,
+    });
+  }
+
+  return processedCharts;
+}
 
 async function callLLM(
   systemPrompt: string,
@@ -277,25 +398,56 @@ CODE RULES:
 - Handle edge cases: null values, empty strings, type coercion.
 - Be concise — no unnecessary loops or variables.
 
-CHART RULES:
-- If the answer is best shown as a chart, also include a CHART_SPEC block.
-- Auto-select the best chart type:
-  * 1 categorical + 1 numeric → "bar"
-  * Proportions/percentages → "pie"  
-  * Time series / dates + numeric → "line"
-  * 2 numeric columns → "scatter"
-  * Simple number / text → no chart needed
-- Format: \`\`\`chart_spec\\n{"type":"bar","labels":[...],"datasets":[{"label":"...","data":[...]}],"title":"..."}\\n\`\`\`
+MULTI-CHART VISUALIZATION RULES:
+- If the user's question implies MULTIPLE distinct visualizations (e.g. "sales by region AND revenue trend over time", or asks for multiple specific chart types like "pie chart of category breakdown and bar chart of price distribution", or is broad/open-ended like "show me interesting trends"), generate MULTIPLE chart specifications (up to 4 max).
+- If only 1 visualization is needed, return an array containing 1 chart specification.
+- Return all chart specifications in a \`\`\`chart_specs ... \`\`\` block as a JSON array of objects (max 4 objects).
+- Each object in chart_specs MUST have:
+  * "id": unique string (e.g. "chart_1", "chart_2")
+  * "type": "bar" | "line" | "pie" | "doughnut" | "scatter" | "area"
+  * "title": Specific descriptive title derived from column names (e.g., "Sales by Region", "Revenue Trend Over Time")
+  * "code": JS code string operating on \`data\` that sets \`chartResult = { labels: [...], datasets: [{ label: "...", data: [...] }] }\`
+  * "xAxisLabel": Column/metric name for X axis
+  * "yAxisLabel": Column/metric name for Y axis
+  * "reasoning": 1-sentence explanation of why this chart type was selected
+
+EXAMPLE CHART_SPECS BLOCK:
+\`\`\`chart_specs
+[
+  {
+    "id": "chart_1",
+    "type": "bar",
+    "title": "Sales by Region",
+    "code": "const m = {}; data.forEach(r => { const k = String(r['Region'] || 'Unknown'); m[k] = (m[k] || 0) + (Number(r['Sales']) || 0); }); chartResult = { labels: Object.keys(m), datasets: [{ label: 'Sales ($)', data: Object.values(m) }] };",
+    "xAxisLabel": "Region",
+    "yAxisLabel": "Sales ($)",
+    "reasoning": "Bar chart comparing categorical region sales"
+  },
+  {
+    "id": "chart_2",
+    "type": "line",
+    "title": "Revenue Trend Over Time",
+    "code": "const m = {}; data.forEach(r => { const k = String(r['Date'] || 'Unknown'); m[k] = (m[k] || 0) + (Number(r['Revenue']) || 0); }); chartResult = { labels: Object.keys(m), datasets: [{ label: 'Revenue ($)', data: Object.values(m) }] };",
+    "xAxisLabel": "Date",
+    "yAxisLabel": "Revenue ($)",
+    "reasoning": "Line chart showing revenue progression over time"
+  }
+]
+\`\`\`
 
 RESPONSE FORMAT:
 \`\`\`javascript
-// Your analysis code here
+// Your main analysis code here
 result = ...;
 \`\`\`
 
 EXPLANATION: [Brief plain-English explanation of what the code does and the answer]
 
-[Optional chart_spec block if visual is needed]`;
+\`\`\`chart_specs
+[
+  ...
+]
+\`\`\``;
 }
 
 function buildRetryPrompt(
@@ -376,14 +528,24 @@ function extractExplanation(response: string): string | null {
   return null;
 }
 
-function extractChartSpec(response: string): any | null {
-  const match = response.match(/```chart_spec\s*\n([\s\S]*?)```/i);
-  if (match && match[1]) {
+function extractChartSpecs(response: string): any[] {
+  // 1. Look for ```chart_specs ... ``` block
+  const specsMatch = response.match(/```chart_specs\s*\n([\s\S]*?)```/i);
+  if (specsMatch && specsMatch[1]) {
     try {
-      return JSON.parse(match[1].trim());
-    } catch {
-      return null;
-    }
+      const parsed = JSON.parse(specsMatch[1].trim());
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch { /* ignore JSON parse error */ }
   }
-  return null;
+
+  // 2. Look for legacy ```chart_spec ... ``` block
+  const singleMatch = response.match(/```chart_spec\s*\n([\s\S]*?)```/i);
+  if (singleMatch && singleMatch[1]) {
+    try {
+      const parsed = JSON.parse(singleMatch[1].trim());
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch { /* ignore JSON parse error */ }
+  }
+
+  return [];
 }
