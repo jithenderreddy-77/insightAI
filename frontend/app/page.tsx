@@ -74,6 +74,86 @@ const ACCEPTED_MIME_TYPES = [
   'image/tiff',
 ];
 
+// Helper to resolve target spreadsheet sheet based on current turn attachments, active files, or latest upload
+function resolveTargetSpreadsheet(
+  currentAttachments: ChatAttachment[],
+  activeFiles: File[],
+  userQuery: string,
+  sessions: Record<string, any>,
+): { targetFileName: string; activeSheet: any; allSheets: any[] } | null {
+  const sessionKeys = Object.keys(sessions);
+  if (sessionKeys.length === 0) return null;
+
+  const qLower = userQuery.toLowerCase();
+  let matchedKey: string | null = null;
+
+  // 1. Check current turn attachments (highest priority)
+  if (currentAttachments && currentAttachments.length > 0) {
+    for (let i = currentAttachments.length - 1; i >= 0; i--) {
+      const attName = currentAttachments[i].name;
+      if (sessions[attName]) {
+        matchedKey = attName;
+        break;
+      }
+      const foundKey = sessionKeys.find(
+        (k) => k.toLowerCase().includes(attName.toLowerCase()) || attName.toLowerCase().includes(k.toLowerCase())
+      );
+      if (foundKey) {
+        matchedKey = foundKey;
+        break;
+      }
+    }
+  }
+
+  // 2. Check active files list in UI (latest uploaded first)
+  if (!matchedKey && activeFiles && activeFiles.length > 0) {
+    for (let i = activeFiles.length - 1; i >= 0; i--) {
+      const fName = activeFiles[i].name;
+      if (sessions[fName]) {
+        matchedKey = fName;
+        break;
+      }
+      const foundKey = sessionKeys.find(
+        (k) => k.toLowerCase().includes(fName.toLowerCase()) || fName.toLowerCase().includes(k.toLowerCase())
+      );
+      if (foundKey) {
+        matchedKey = foundKey;
+        break;
+      }
+    }
+  }
+
+  // 3. Check if query explicitly mentions a file name in sessions
+  if (!matchedKey) {
+    for (const key of sessionKeys) {
+      const baseKey = key.split('.')[0].toLowerCase();
+      if (baseKey.length > 3 && qLower.includes(baseKey)) {
+        matchedKey = key;
+        break;
+      }
+    }
+  }
+
+  // 4. Fallback to LATEST uploaded spreadsheet in sessionKeys (NOT the oldest [0]!)
+  if (!matchedKey) {
+    matchedKey = sessionKeys[sessionKeys.length - 1];
+  }
+
+  const ssData = sessions[matchedKey];
+  const activeSheet = ssData?.sheets?.[0];
+  const allSheets = Object.values(sessions).flatMap((s: any) => s?.sheets || []);
+
+  if (!activeSheet) return null;
+
+  console.log(`[Spreadsheet Agent] Resolved target file: "${matchedKey}" (headers: ${activeSheet.headers?.join(', ')})`);
+
+  return {
+    targetFileName: matchedKey,
+    activeSheet,
+    allSheets,
+  };
+}
+
 export default function Home() {
   const { toast } = useToast();
   
@@ -546,18 +626,15 @@ export default function Home() {
 
       // --- SPREADSHEET ANALYTICS PATH ---
       if (isAnalyticalQuery) {
-        const firstFile = spreadsheetFileNames[0];
-        const ssData = spreadsheetSessions[firstFile];
-        const activeSheet = ssData?.sheets?.[0];
+        const targetObj = resolveTargetSpreadsheet(currentAttachments, files, userMessage, spreadsheetSessions);
+        const activeSheet = targetObj?.activeSheet;
+        const allSheets = targetObj?.allSheets || Object.values(spreadsheetSessions).flatMap((s: any) => s?.sheets || []);
 
         if (activeSheet) {
           // Detect if this is a scientific dataset (has scientificProfile with non-General type)
           const isScientificDataset = activeSheet.scientificProfile &&
             activeSheet.scientificProfile.experimentType !== 'General' &&
             activeSheet.scientificProfile.confidence > 0.3;
-
-          // Collect all sheets across all active uploaded files in session for multi-dataset comparisons
-          const allSheets = Object.values(spreadsheetSessions).flatMap((s: any) => s?.sheets || []);
 
           let response: Response;
 
@@ -1103,6 +1180,11 @@ export default function Home() {
 
   const handleRemoveFile = (fileToRemove: File) => {
     setFiles(files.filter((file) => file !== fileToRemove));
+    setSpreadsheetSessions((prev) => {
+      const updated = { ...prev };
+      delete updated[fileToRemove.name];
+      return updated;
+    });
     toast({
       title: 'File removed',
       description: `${fileToRemove.name} has been removed`,
@@ -1113,6 +1195,9 @@ export default function Home() {
   // Handle Returning to Home Dashboard
   const handleReturnHome = () => {
     setMessages([]);
+    setFiles([]);
+    setSpreadsheetSessions({});
+    setIsPrefetched(false);
     const newId = crypto.randomUUID();
     setThreadId(newId);
   };
