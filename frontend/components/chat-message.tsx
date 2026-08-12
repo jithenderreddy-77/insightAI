@@ -3,7 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, Check, FileText, User, Download, ExternalLink, Image as ImageIcon, Music, Video, FileSpreadsheet, Archive, File } from 'lucide-react';
+import { Copy, Check, FileText, User, Download, ExternalLink, Image as ImageIcon, Music, Video, FileSpreadsheet, Archive, File, Code2, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PDFDocument } from '@/types/graphTypes';
@@ -84,20 +84,26 @@ function preprocessMermaidContent(content: string): string {
   return processed;
 }
 
-export function ChatMessage({ message, onTransactionConfirm, onTransactionAddToCart, onTransactionCancel }: ChatMessageProps) {
-  const isUser = message.role === 'user';
+export function ChatMessage({
+  message,
+  onTransactionConfirm,
+  onTransactionAddToCart,
+  onTransactionCancel,
+}: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
+  const isUser = message.role === 'user';
   const isLoading = message.role === 'assistant' && message.content === '';
 
-  // Extract chart data, scientific reports, and transaction previews from markers
-  const { displayContent, chartData, scientificReport, transactionData } = useMemo(() => {
+  // Extract chart data, scientific reports, code reasoning, and transaction previews from markers
+  const { displayContent, chartData, scientificReport, codeReasoning, transactionData } = useMemo(() => {
     if (message.role !== 'assistant' || !message.content) {
-      return { displayContent: message.content, chartData: null, scientificReport: null, transactionData: message.transaction || null };
+      return { displayContent: message.content, chartData: null, scientificReport: null, codeReasoning: null, transactionData: message.transaction || null };
     }
 
     let content = message.content;
     let chart = null;
     let sciReport: ScientificReportData | null = null;
+    let reasoningObj: { code: string; executionTimeMs?: number } | null = null;
     let txRecord: TransactionRecord | null = message.transaction || null;
 
     // Extract transaction preview marker
@@ -127,7 +133,22 @@ export function ChatMessage({ message, onTransactionConfirm, onTransactionAddToC
       content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
     }
 
-    return { displayContent: content, chartData: chart, scientificReport: sciReport, transactionData: txRecord };
+    // Extract code reasoning
+    const reasoningMatch = content.match(/<!--CODE_REASONING:([\s\S]*?)-->/);
+    if (reasoningMatch) {
+      try {
+        reasoningObj = JSON.parse(reasoningMatch[1]);
+      } catch { /* ignore */ }
+      content = content.replace(/<!--CODE_REASONING:[\s\S]*?-->/, '').trim();
+    }
+
+    // Strip leftover raw HTML details/summary strings from legacy responses
+    content = content
+      .replace(/<\/?details>/gi, '')
+      .replace(/<summary>.*?<\/summary>/gi, '')
+      .trim();
+
+    return { displayContent: content, chartData: chart, scientificReport: sciReport, codeReasoning: reasoningObj, transactionData: txRecord };
   }, [message.content, message.role, message.transaction]);
 
   const handleCopy = async () => {
@@ -358,6 +379,24 @@ export function ChatMessage({ message, onTransactionConfirm, onTransactionAddToC
                     </div>
                   );
                 })()}
+
+                {/* Trust Layer: Main Reasoning Code Panel */}
+                {codeReasoning && codeReasoning.code && (
+                  <details className="group my-3 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 text-xs shadow-sm">
+                    <summary className="cursor-pointer font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5">
+                        <Code2 className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Show reasoning {codeReasoning.executionTimeMs ? `(${codeReasoning.executionTimeMs}ms)` : ''}</span>
+                      </span>
+                      <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="mt-2">
+                      <pre className="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto">
+                        <code>{codeReasoning.code}</code>
+                      </pre>
+                    </div>
+                  </details>
+                )}
 
                 {/* Render Scientific Report if scientific analysis data is present */}
                 {scientificReport && (

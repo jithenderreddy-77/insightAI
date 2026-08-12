@@ -86,6 +86,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 0. Hard Column Grounding Check (Deterministic anti-hallucination)
+    const grounding = checkColumnGrounding(question, sheetData.headers);
+    if (grounding.isMissing) {
+      return NextResponse.json({
+        type: 'missing_columns',
+        message: grounding.message,
+      });
+    }
+
     // Build schema prompt for the LLM (never send full data — just schema + 5 sample rows)
     const schemaPrompt = schemaToPrompt(sheetData);
 
@@ -100,6 +109,14 @@ export async function POST(req: NextRequest) {
         { error: 'Could not reach the AI model. Please try again.' },
         { status: 502 },
       );
+    }
+
+    // Check if requested columns do not exist
+    if (llmResponse.startsWith('MISSING_COLUMNS:')) {
+      return NextResponse.json({
+        type: 'missing_columns',
+        message: llmResponse.replace('MISSING_COLUMNS:', '').trim(),
+      });
     }
 
     // Check if the LLM wants to ask a clarifying question
@@ -375,6 +392,67 @@ async function callLLM(
 }
 
 // ---------------------------------------------------------------------------
+// Hard Column Grounding & Anti-Hallucination
+// ---------------------------------------------------------------------------
+
+function checkColumnGrounding(
+  question: string,
+  headers: string[],
+): { isMissing: boolean; missingTerms: string[]; availableHeaders: string[]; message: string } {
+  const qLower = question.toLowerCase();
+
+  // Defined entity and metric domain concepts
+  const domainConcepts: Record<string, string[]> = {
+    Revenue: ['revenue', 'sales', 'earnings', 'turnover', 'income', 'profit', 'gross revenue'],
+    Region: ['region', 'area', 'zone', 'territory', 'location', 'country', 'city', 'state'],
+    Sales: ['sales', 'orders', 'units sold', 'volume'],
+    Profit: ['profit', 'margin', 'net profit', 'gain'],
+    Cost: ['cost', 'expense', 'spending', 'outlay'],
+    Price: ['price', 'pricing', 'unit price', 'rate'],
+    Score: ['score', 'grade', 'marks', 'math', 'science', 'english', 'points', 'rating'],
+    Attendance: ['attendance', 'presence', 'participation', 'absence'],
+    Student: ['student', 'student name', 'pupil', 'learner'],
+    Customer: ['customer', 'client', 'user', 'buyer', 'purchaser'],
+    Date: ['date', 'time', 'year', 'month', 'day', 'timestamp', 'period'],
+    Category: ['category', 'product category', 'type', 'genre', 'item category'],
+  };
+
+  const headersLower = headers.map((h) => h.toLowerCase());
+
+  // Check if a concept matches any header
+  const isConceptInHeaders = (concept: string): boolean => {
+    const synonyms = domainConcepts[concept] || [concept.toLowerCase()];
+    return headersLower.some((h) => synonyms.some((syn) => h.includes(syn) || syn.includes(h)));
+  };
+
+  const missingConcepts: string[] = [];
+
+  for (const [concept, synonyms] of Object.entries(domainConcepts)) {
+    // Is the user explicitly asking for this concept in their question?
+    const isAsked = synonyms.some((syn) => new RegExp(`\\b${syn}\\b`, 'i').test(qLower));
+    if (isAsked && !isConceptInHeaders(concept)) {
+      if (!missingConcepts.includes(concept)) {
+        missingConcepts.push(concept);
+      }
+    }
+  }
+
+  if (missingConcepts.length > 0) {
+    const missingStr = missingConcepts.join(' or ');
+    const availableStr = headers.join(', ');
+    const suggestions = headers.slice(0, 3).join(', ');
+    return {
+      isMissing: true,
+      missingTerms: missingConcepts,
+      availableHeaders: headers,
+      message: `This file doesn't have ${missingStr} columns — it has [${availableStr}]. Did you mean something else, such as ${suggestions}?`,
+    };
+  }
+
+  return { isMissing: false, missingTerms: [], availableHeaders: headers, message: '' };
+}
+
+// ---------------------------------------------------------------------------
 // Prompt Engineering
 // ---------------------------------------------------------------------------
 
@@ -385,9 +463,10 @@ SPREADSHEET SCHEMA:
 ${schemaPrompt}
 
 YOUR TASK:
-1. If the user's question is clear, generate JavaScript code to answer it.
-2. If the question is genuinely ambiguous (e.g., could mean total vs. average, or multiple columns match a vague term), respond with EXACTLY: "CLARIFY: [your clarifying question]"
-3. Never guess silently when multiple valid interpretations exist.
+1. If the user's question is clear and the requested columns/metrics exist, generate JavaScript code to answer it.
+2. If the requested columns do NOT exist in this file, NEVER substitute or reinterpret unrelated columns to answer a question about data that doesn't exist (e.g. NEVER map "Student Name" to "Region" or "Math" to "Revenue"). Instead, respond with EXACTLY: "MISSING_COLUMNS: This file doesn't have [requested missing columns] columns — it has [list actual headers]. Did you mean something else, such as [suggest 2 relevant headers]?"
+3. If the question is genuinely ambiguous (e.g., could mean total vs. average, or multiple columns match a vague term), respond with EXACTLY: "CLARIFY: [your clarifying question]"
+4. Never guess silently when multiple valid interpretations exist.
 
 CODE RULES:
 - Write valid JavaScript that operates on a \`data\` array (array of objects with keys: ${JSON.stringify(headers)}).

@@ -593,12 +593,14 @@ export default function Home() {
 
           let assistantContent = '';
 
-          if (result.type === 'clarification') {
+          if (result.type === 'missing_columns') {
+            assistantContent = `⚠️ **Data Column Notice:**\n\n${result.message}`;
+          } else if (result.type === 'clarification') {
             assistantContent = `🤔 **I need a bit more info:**\n\n${result.message}`;
           } else if (result.type === 'error') {
             assistantContent = `⚠️ ${result.message}`;
             if (result.code) {
-              assistantContent += `\n\n<details>\n<summary>🔍 Show generated code</summary>\n\n\`\`\`javascript\n${result.code}\n\`\`\`\n</details>`;
+              assistantContent += `\n\n<!--CODE_REASONING:${JSON.stringify({ code: result.code, executionTimeMs: result.executionTimeMs || 0 })}-->`;
             }
           } else if (result.type === 'scientific_answer') {
             // Scientific analysis result — embed as structured report marker
@@ -615,21 +617,23 @@ export default function Home() {
             assistantContent += `\n\n<!--SCIENTIFIC_REPORT:${JSON.stringify(reportData)}-->`;
           } else if (result.type === 'answer') {
             // Generic spreadsheet analysis result
-            const formattedResult = typeof result.result === 'object'
-              ? JSON.stringify(result.result, null, 2)
-              : String(result.result);
-
             assistantContent = `📊 **Analysis Result:**\n\n${result.explanation || ''}\n\n`;
 
-            // Render result as table if it's an array of objects
+            // Render result as table if it's an array of row objects
             if (Array.isArray(result.result) && result.result.length > 0 && typeof result.result[0] === 'object') {
               const keys = Object.keys(result.result[0]);
               assistantContent += `| ${keys.join(' | ')} |\n| ${keys.map(() => '---').join(' | ')} |\n`;
               for (const row of result.result.slice(0, 50)) {
                 assistantContent += `| ${keys.map(k => row[k] ?? '').join(' | ')} |\n`;
               }
-            } else {
-              assistantContent += `\`\`\`\n${formattedResult}\n\`\`\``;
+            } else if (
+              result.result !== null &&
+              result.result !== undefined &&
+              typeof result.result !== 'object' &&
+              String(result.result).trim().length > 0
+            ) {
+              // Format scalar numerical or string values
+              assistantContent += `\`\`\`\n${String(result.result)}\n\`\`\``;
             }
 
             // Chart data marker for chat-message.tsx to render
@@ -637,9 +641,9 @@ export default function Home() {
               assistantContent += `\n\n<!--CHART_DATA:${JSON.stringify(result.chartData)}-->`;
             }
 
-            // Trust layer: show reasoning
+            // Trust layer marker for reasoning code
             if (result.code) {
-              assistantContent += `\n\n<details>\n<summary>🔍 Show reasoning (${result.executionTimeMs || 0}ms)</summary>\n\n\`\`\`javascript\n${result.code}\n\`\`\`\n</details>`;
+              assistantContent += `\n\n<!--CODE_REASONING:${JSON.stringify({ code: result.code, executionTimeMs: result.executionTimeMs || 0 })}-->`;
             }
           } else {
             assistantContent = result.result || result.message || 'Analysis complete.';
