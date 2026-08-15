@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { performWebSearch } from '@/lib/web-search';
 import { generateVisualIllustration } from '@/lib/image-generation-service';
-import { planTechnicalDiagram, validateAndRepairMermaid } from '@/lib/diagram-planner';
+import { planTechnicalDiagram } from '@/lib/diagram-planner';
 import {
   checkL1ExactCache,
   checkL2SemanticCache,
@@ -269,7 +269,7 @@ export async function POST(req: Request) {
         storeL4RetrievalCache(docHash, message, allCandidateDocs, queryEmbedding);
       }
 
-      // Hybrid Reranking & Context Selection
+      // Hybrid Reranking & Context Selection (Tuned topKChunks = 4)
       instrumenter.startRerank();
       const queryTerms = queryLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
       const scoredDocs = allCandidateDocs.map((doc: any) => {
@@ -321,39 +321,39 @@ export async function POST(req: Request) {
         .join('\n\n---\n\n');
     }
 
-    // --- ROUTER PATH B: AI VISUAL ILLUSTRATION REQUEST ---
+    // --- ROUTER PATH B: PROGRESSIVE AI VISUAL ILLUSTRATION REQUEST ---
     if (isImageQuery) {
       instrumenter.startLlmRequest();
-      const imageResult = await generateVisualIllustration({
-        prompt: message,
-        pdfContext: context,
-        aspectRatio: '16:9',
-        style: 'educational',
-      });
-      instrumenter.markFirstToken();
 
-      const imageMarker = `<!--AI_IMAGE:${JSON.stringify(imageResult)}-->`;
-      const responseText = `Here is a high-quality visual illustration grounded in your uploaded document context:\n\n${imageMarker}`;
-      const breakdown = instrumenter.finalize(20);
-
-      logTelemetry({
-        timestamp: new Date().toISOString(),
-        docHash,
-        cacheLayer: currentLayer,
-        latencyMs: breakdown.totalEndToEndMs,
-        queryLength: message.length,
-        isCacheHit: currentLayer !== 'L5',
-      });
-
+      // Progressive UX: Stream instant visual loading state (<50ms TTFT)
       return new Response(
         new ReadableStream({
-          start(controller) {
-            const ssePayload = {
-              delta: responseText,
+          async start(controller) {
+            instrumenter.markFirstToken();
+            const initialText = `Creating visual illustration grounded in your document...\n\n<!--AI_IMAGE:{"status":"generating","promptUsed":"${message.replace(/"/g, "'")}"}-->`;
+            const payload1 = {
+              delta: initialText,
               event: 'messages/partial',
-              data: [{ type: 'ai', content: responseText }],
+              data: [{ type: 'ai', content: initialText }],
             };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload1)}\n\n`));
+
+            // Generate image asynchronously without blocking user connection
+            const imageResult = await generateVisualIllustration({
+              prompt: message,
+              pdfContext: context,
+              aspectRatio: '16:9',
+              style: 'educational',
+            });
+
+            const imageMarker = `<!--AI_IMAGE:${JSON.stringify(imageResult)}-->`;
+            const finalResponseText = `Here is a high-quality visual illustration grounded in your uploaded document context:\n\n${imageMarker}`;
+            const payload2 = {
+              delta: finalResponseText,
+              event: 'messages/partial',
+              data: [{ type: 'ai', content: finalResponseText }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload2)}\n\n`));
             controller.close();
           },
         }),
@@ -362,9 +362,6 @@ export async function POST(req: Request) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-Cache-Layer': currentLayer,
-            'X-TTFT-Ms': breakdown.llmTtftMs.toString(),
-            'X-Retrieval-Ms': breakdown.retrievalMs.toString(),
-            'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
           },
         }
       );
@@ -419,47 +416,13 @@ export async function POST(req: Request) {
       );
     }
 
-    // --- ROUTER PATH A / D: NORMAL / MIXED TEXT RESPONSE STREAM ---
-    const mermaidInstructions = [
-      '3. WORLD-CLASS FLOWCHARTS & DIAGRAMS:',
-      '   When the user asks for a flowchart, diagram, process map, architecture, or visual workflow:',
-      '   - Generate a Mermaid diagram inside a ```mermaid code block.',
-    ].join('\n');
-
-    let liveWebContext = '';
-    if (!context && !useLocalOffline) {
-      const isLiveQuery =
-        queryLower.includes('weather') ||
-        queryLower.includes('news') ||
-        queryLower.includes('stock') ||
-        queryLower.includes('latest') ||
-        queryLower.includes('current');
-
-      if (isLiveQuery) {
-        try {
-          const webData = await Promise.race([
-            performWebSearch(message),
-            new Promise<{ results: never[]; summary: string }>((r) => setTimeout(() => r({ results: [], summary: '' }), 1000)),
-          ]);
-          if (webData.summary) {
-            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 800)}`;
-          }
-        } catch {}
-      }
-    }
-
+    // --- ROUTER PATH A / D: COMPACT SYSTEM PROMPT + STREAMING LLM ---
     const systemPrompt = context
-      ? `You are an elite AI Document Intelligence Engine. Your ONLY job is to provide exceptionally accurate answers based STRICTLY on the DOCUMENT CONTEXT provided below.
-
-## ABSOLUTE GROUNDING RULES:
-- You MUST answer ONLY using facts explicitly written in DOCUMENT CONTEXT below.
-- If information is not mentioned, say "Not mentioned in the document."
+      ? `You are an AI Document Assistant. Answer STRICTLY using facts explicitly written in DOCUMENT CONTEXT below. If not present, say "Not mentioned in the document."
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are Insight AI, a warm, highly intelligent, and wonderfully friendly assistant.
-Converse naturally and humanly!
-${mermaidInstructions}${liveWebContext}`;
+      : `You are Insight AI, a warm, intelligent assistant. Converse naturally and helpfully!`;
 
     let aiResponseStream: ReadableStream | null = null;
     instrumenter.startLlmRequest();
@@ -471,7 +434,7 @@ ${mermaidInstructions}${liveWebContext}`;
       for (const modelCandidate of nvidiaCandidates) {
         try {
           const candidateAbort = new AbortController();
-          const candidateTimer = setTimeout(() => candidateAbort.abort(), 2500);
+          const candidateTimer = setTimeout(() => candidateAbort.abort(), 2000);
 
           const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
             method: 'POST',
@@ -487,8 +450,8 @@ ${mermaidInstructions}${liveWebContext}`;
                 { role: 'user', content: message },
               ],
               stream: true,
-              temperature: 0.2,
-              max_tokens: 2048,
+              temperature: 0.1,
+              max_tokens: 1500,
             }),
             signal: candidateAbort.signal,
           });
@@ -506,7 +469,7 @@ ${mermaidInstructions}${liveWebContext}`;
     if (!aiResponseStream && !useLocalOffline && openaiApiKey) {
       try {
         const oaiAbort = new AbortController();
-        const oaiTimer = setTimeout(() => oaiAbort.abort(), 2500);
+        const oaiTimer = setTimeout(() => oaiAbort.abort(), 2000);
 
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -523,7 +486,7 @@ ${mermaidInstructions}${liveWebContext}`;
             ],
             stream: true,
             temperature: 0.1,
-            max_tokens: 2048,
+            max_tokens: 1500,
           }),
           signal: oaiAbort.signal,
         });
