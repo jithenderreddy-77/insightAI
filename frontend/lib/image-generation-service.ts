@@ -12,6 +12,7 @@ export interface ImageGenResult {
   promptUsed: string;
   provider: string;
   groundedFacts?: string[];
+  status?: string;
   error?: string;
 }
 

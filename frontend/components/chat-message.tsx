@@ -113,13 +113,21 @@ export function ChatMessage({
     let txRecord: TransactionRecord | null = message.transaction || null;
     let imgResult: ImageGenResult | null = null;
 
-    // Extract AI Image marker
-    const imgMatch = content.match(/<!--AI_IMAGE:([\s\S]*?)-->/);
-    if (imgMatch) {
-      try {
-        imgResult = JSON.parse(imgMatch[1]);
-      } catch {}
-      content = content.replace(/<!--AI_IMAGE:[\s\S]*?-->/, '').trim();
+    // Robust extraction for AI Image markers (handles multiple progressive markers gracefully)
+    const imgMatches = Array.from(content.matchAll(/<!--AI_IMAGE:([\s\S]*?)-->/g));
+    if (imgMatches.length > 0) {
+      for (const match of imgMatches) {
+        try {
+          const parsed = JSON.parse(match[1]);
+          if (parsed) {
+            // Prefer completed payload with imageUrl over transient status
+            if (parsed.imageUrl || !imgResult) {
+              imgResult = parsed;
+            }
+          }
+        } catch {}
+      }
+      content = content.replace(/<!--AI_IMAGE:[\s\S]*?-->/g, '').trim();
     }
 
     // Extract transaction preview marker
@@ -128,7 +136,7 @@ export function ChatMessage({
       try {
         txRecord = JSON.parse(txMatch[1]);
       } catch {}
-      content = content.replace(/<!--TRANSACTION_PREVIEW:[\s\S]*?-->/, '').trim();
+      content = content.replace(/<!--TRANSACTION_PREVIEW:[\s\S]*?-->/g, '').trim();
     }
 
     // Extract scientific report
@@ -137,7 +145,7 @@ export function ChatMessage({
       try {
         sciReport = JSON.parse(sciMatch[1]);
       } catch {}
-      content = content.replace(/<!--SCIENTIFIC_REPORT:[\s\S]*?-->/, '').trim();
+      content = content.replace(/<!--SCIENTIFIC_REPORT:[\s\S]*?-->/g, '').trim();
     }
 
     // Extract chart data
@@ -146,7 +154,7 @@ export function ChatMessage({
       try {
         chart = JSON.parse(chartMatch[1]);
       } catch {}
-      content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
+      content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/g, '').trim();
     }
 
     // Extract code reasoning
@@ -155,7 +163,7 @@ export function ChatMessage({
       try {
         reasoningObj = JSON.parse(reasoningMatch[1]);
       } catch {}
-      content = content.replace(/<!--CODE_REASONING:[\s\S]*?-->/, '').trim();
+      content = content.replace(/<!--CODE_REASONING:[\s\S]*?-->/g, '').trim();
     }
 
     content = content
@@ -199,179 +207,146 @@ export function ChatMessage({
         />
       )}
 
-      <div
-        className={`max-w-[85%] sm:max-w-[80%] rounded-2xl px-4 py-3 ${
-          isUser
-            ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/20'
-            : 'glass-card shadow-sm text-slate-800 dark:text-slate-100'
-        }`}
-      >
-        {isLoading ? (
-          <div className="flex space-x-1.5 h-6 items-center px-1">
-            <div className="w-2 h-2 bg-indigo-400 rounded-full animate-[loading_1s_ease-in-out_infinite]" />
-            <div className="w-2 h-2 bg-purple-400 rounded-full animate-[loading_1s_ease-in-out_0.2s_infinite]" />
-            <div className="w-2 h-2 bg-violet-400 rounded-full animate-[loading_1s_ease-in-out_0.4s_infinite]" />
-          </div>
-        ) : (
-          <>
-            {/* Render persistent uploaded attachments */}
-            {message.attachments && message.attachments.length > 0 && (
-              <div className="flex flex-col gap-2 mb-2">
-                {message.attachments.map((att, idx) => {
-                  const isImg = (att.mimeType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(att.name);
-                  const isAud = (att.mimeType || '').startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(att.name);
-                  const isVid = (att.mimeType || '').startsWith('video/') || /\.(mp4|webm|mov)$/i.test(att.name);
+      <div className={`flex flex-col gap-2 max-w-[85%] sm:max-w-[80%] ${isUser ? 'items-end' : 'items-start'}`}>
+        {/* User / Assistant Header */}
+        <div className="flex items-center gap-2 px-1">
+          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+            {isUser ? 'You' : 'Insight AI'}
+          </span>
+        </div>
 
-                  if (isImg && att.url) {
-                    return (
-                      <div key={att.id || idx} className="rounded-xl overflow-hidden border border-white/20 dark:border-slate-700/50 shadow-sm max-w-xs">
-                        <img src={att.url} alt={att.name} className="w-full h-auto max-h-56 object-cover" />
-                        <div className="p-1.5 bg-slate-900/70 backdrop-blur-sm text-white text-[11px] flex justify-between items-center px-2.5">
-                          <span className="truncate max-w-[180px]">{att.name}</span>
-                          <a href={att.url} target="_blank" rel="noopener noreferrer" download={att.name} className="hover:text-indigo-300 transition-colors">
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  if (isAud && att.url) {
-                    return (
-                      <div key={att.id || idx} className="p-2 rounded-xl bg-slate-900/40 border border-slate-700/50 w-full max-w-xs">
-                        <p className="text-xs font-medium mb-1 truncate text-slate-100">{att.name}</p>
-                        <audio controls src={att.url} className="w-full h-8" />
-                      </div>
-                    );
-                  }
-
-                  if (isVid && att.url) {
-                    return (
-                      <div key={att.id || idx} className="rounded-xl overflow-hidden border border-slate-700/50 max-w-xs">
-                        <video controls src={att.url} className="w-full max-h-52" />
-                        <p className="text-[11px] p-1.5 bg-slate-900/70 text-white truncate px-2">{att.name}</p>
-                      </div>
-                    );
-                  }
-
+        {/* Message Bubble Container */}
+        <div
+          className={`relative group p-4 rounded-2xl shadow-sm transition-all duration-200 ${
+            isUser
+              ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-tr-none'
+              : 'bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-tl-none shadow-md'
+          }`}
+        >
+          {/* Attachments Preview */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {message.attachments.map((att, idx) => {
+                if ((att as any).type === 'image' || att.url?.match(/\.(png|jpg|jpeg|webp|gif)$/i)) {
                   return (
-                    <a
-                      key={att.id || idx}
-                      href={att.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      download={att.name}
-                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-medium transition-all duration-200 hover:scale-[1.01] ${
-                        isUser
-                          ? 'bg-white/10 border-white/20 text-white hover:bg-white/20'
-                          : 'bg-indigo-50/70 border-indigo-100 text-indigo-900 dark:bg-slate-800/70 dark:border-slate-700 dark:text-indigo-200 hover:bg-indigo-100/70'
-                      }`}
-                    >
-                      <FileText className="w-4 h-4 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate font-semibold">{att.name}</p>
-                        {att.sizeBytes && <p className="text-[10px] opacity-70">{(att.sizeBytes / 1024).toFixed(1)} KB</p>}
-                      </div>
-                      <Download className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                    </a>
+                    <div key={att.id || idx} className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-xs">
+                      <img src={att.url} alt={att.name} className="w-full max-h-48 object-cover" />
+                    </div>
                   );
-                })}
-              </div>
-            )}
+                }
+                return (
+                  <div key={att.id || idx} className="flex items-center gap-2 p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs">
+                    <FileText className="w-4 h-4 text-indigo-500" />
+                    <span className="truncate max-w-[140px] font-medium">{att.name}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
-            {isUser ? (
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
-            ) : (
-              <div className="prose prose-sm dark:prose-invert max-w-none space-y-2 text-sm leading-relaxed">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    table: ({ node, ...props }) => (
-                      <div className="my-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-xs text-left" {...props} />
-                      </div>
-                    ),
-                    thead: ({ node, ...props }) => (
-                      <thead className="bg-slate-100/80 dark:bg-slate-800/80 font-bold text-slate-700 dark:text-slate-200" {...props} />
-                    ),
-                    th: ({ node, ...props }) => (
-                      <th className="px-3 py-2 font-bold border-b border-slate-200 dark:border-slate-800" {...props} />
-                    ),
-                    td: ({ node, ...props }) => (
-                      <td className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/60" {...props} />
-                    ),
-                    tr: ({ node, ...props }) => (
-                      <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" {...props} />
-                    ),
-                    pre: ({ node, children, ...props }: any) => {
-                      const child = Array.isArray(children) ? children[0] : children;
-                      if (child?.props?.className?.includes('language-mermaid')) {
-                        const codeText = String(child.props.children).replace(/\n$/, '');
-                        return <MermaidDiagram key={codeText.slice(0, 40)} chart={codeText} />;
-                      }
-                      const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();
-                      const mermaidPrefixes = [
-                        'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
-                        'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
-                        'journey', 'mindmap', 'timeline',
-                      ];
-                      if (
-                        mermaidPrefixes.some((p) => codeText.startsWith(p)) ||
-                        (codeText.includes('subgraph') && (codeText.includes('-->') || codeText.includes('---')))
-                      ) {
-                        return <MermaidDiagram chart={codeText} />;
-                      }
-                      return <pre {...props}>{children}</pre>;
-                    },
-                    code: ({ node, inline, className, children, ...props }: any) => {
-                      const match = /language-(\w+)/.exec(className || '');
-                      const codeString = String(children).replace(/\n$/, '');
-                      const trimmed = codeString.trim();
+          {/* Loading Dots */}
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 py-1 px-2">
+              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce [animation-delay:-0.3s]" />
+              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce [animation-delay:-0.15s]" />
+              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" />
+            </div>
+          ) : (
+            <>
+              {isUser ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+              ) : (
+                <div className="prose prose-sm dark:prose-invert max-w-none space-y-2 text-sm leading-relaxed">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      table: ({ node, ...props }) => (
+                        <div className="my-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                          <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-xs text-left" {...props} />
+                        </div>
+                      ),
+                      thead: ({ node, ...props }) => (
+                        <thead className="bg-slate-100/80 dark:bg-slate-800/80 font-bold text-slate-700 dark:text-slate-200" {...props} />
+                      ),
+                      th: ({ node, ...props }) => (
+                        <th className="px-3 py-2 font-bold border-b border-slate-200 dark:border-slate-800" {...props} />
+                      ),
+                      td: ({ node, ...props }) => (
+                        <td className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/60" {...props} />
+                      ),
+                      tr: ({ node, ...props }) => (
+                        <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" {...props} />
+                      ),
+                      pre: ({ node, children, ...props }: any) => {
+                        const child = Array.isArray(children) ? children[0] : children;
+                        if (child?.props?.className?.includes('language-mermaid')) {
+                          const codeText = String(child.props.children).replace(/\n$/, '');
+                          return <MermaidDiagram key={codeText.slice(0, 40)} chart={codeText} />;
+                        }
+                        const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();
+                        const mermaidPrefixes = [
+                          'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
+                          'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
+                          'journey', 'mindmap', 'timeline',
+                        ];
+                        if (
+                          mermaidPrefixes.some((p) => codeText.startsWith(p)) ||
+                          (codeText.includes('subgraph') && (codeText.includes('-->') || codeText.includes('---')))
+                        ) {
+                          return <MermaidDiagram chart={codeText} />;
+                        }
+                        return <pre {...props}>{children}</pre>;
+                      },
+                      code: ({ node, inline, className, children, ...props }: any) => {
+                        const match = /language-(\w+)/.exec(className || '');
+                        const codeString = String(children).replace(/\n$/, '');
+                        const trimmed = codeString.trim();
 
-                      const isMermaidLang = match?.[1] === 'mermaid';
-                      const isMermaidContent = [
-                        'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
-                        'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
-                        'journey', 'mindmap', 'timeline',
-                      ].some((p) => trimmed.startsWith(p)) ||
-                        (trimmed.includes('subgraph') && (trimmed.includes('-->') || trimmed.includes('---')));
+                        const isMermaidLang = match?.[1] === 'mermaid';
+                        const isMermaidContent = [
+                          'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
+                          'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
+                          'journey', 'mindmap', 'timeline',
+                        ].some((p) => trimmed.startsWith(p)) ||
+                          (trimmed.includes('subgraph') && (trimmed.includes('-->') || trimmed.includes('---')));
 
-                      if (!inline && (isMermaidLang || isMermaidContent)) {
-                        return <MermaidDiagram chart={codeString} />;
-                      }
+                        if (!inline && (isMermaidLang || isMermaidContent)) {
+                          return <MermaidDiagram chart={codeString} />;
+                        }
 
-                      if (inline) {
+                        if (inline) {
+                          return (
+                            <code className="px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-mono text-[11px]" {...props}>
+                              {children}
+                            </code>
+                          );
+                        }
+
                         return (
-                          <code className="px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-mono text-[11px]" {...props}>
-                            {children}
-                          </code>
+                          <pre className="my-3 p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto">
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          </pre>
                         );
-                      }
+                      },
+                    }}
+                  >
+                    {preprocessMermaidContent(displayContent)}
+                  </ReactMarkdown>
 
-                      return (
-                        <pre className="my-3 p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs overflow-x-auto">
-                          <code className={className} {...props}>
-                            {children}
-                          </code>
-                        </pre>
-                      );
-                    },
-                  }}
-                >
-                  {preprocessMermaidContent(displayContent)}
-                </ReactMarkdown>
+                  {/* Render AI Image Card if AI Image payload is present */}
+                  {aiImageData && (aiImageData.imageUrl || aiImageData.status === 'generating') && (
+                    <AIImageCard
+                      imageUrl={aiImageData.imageUrl}
+                      prompt={aiImageData.promptUsed}
+                      provider={aiImageData.provider}
+                      groundedFacts={aiImageData.groundedFacts}
+                      status={aiImageData.status}
+                    />
+                  )}
 
-                {/* Render AI Image Card if AI Image payload is present */}
-                {aiImageData && aiImageData.imageUrl && (
-                  <AIImageCard
-                    imageUrl={aiImageData.imageUrl}
-                    prompt={aiImageData.promptUsed}
-                    provider={aiImageData.provider}
-                    groundedFacts={aiImageData.groundedFacts}
-                  />
-                )}
-
-                {/* Render Chart.js visualization(s) */}
+                  {/* Render Chart.js visualization(s) */}
                 {(() => {
                   if (!chartData) return null;
                   const chartList = Array.isArray(chartData) ? chartData : [chartData];
@@ -379,125 +354,81 @@ export function ChatMessage({
                   if (validCharts.length === 0) return null;
 
                   return (
-                    <div className={`my-4 ${validCharts.length > 1 ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : 'flex flex-col gap-4'}`}>
-                      {validCharts.map((c: any, idx: number) => {
-                        const key = c.id || `chart-${c.type}-${c.title?.replace(/\s+/g, '-') || idx}`;
-                        return (
-                          <DataChart
-                            key={key}
-                            id={key}
-                            type={c.type || 'bar'}
-                            labels={c.labels || []}
-                            datasets={c.datasets || []}
-                            title={c.title}
-                            code={c.code}
-                            executionTimeMs={c.executionTimeMs}
-                            reasoning={c.reasoning}
-                            failed={c.failed}
-                            error={c.error}
-                            xAxisLabel={c.xAxisLabel}
-                            yAxisLabel={c.yAxisLabel}
-                          />
-                        );
-                      })}
+                    <div className="space-y-4 my-4">
+                      {validCharts.map((singleChart: any, index: number) => (
+                        <DataChart key={singleChart.id || index} {...singleChart} />
+                      ))}
                     </div>
                   );
                 })()}
 
-                {/* Code Reasoning Panel */}
-                {codeReasoning && codeReasoning.code && (
-                  <details className="group my-3 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 text-xs shadow-sm">
-                    <summary className="cursor-pointer font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-between text-xs">
-                      <span className="flex items-center gap-1.5">
-                        <Code2 className="w-3.5 h-3.5 text-indigo-500" />
-                        <span>Show reasoning {codeReasoning.executionTimeMs ? `(${codeReasoning.executionTimeMs}ms)` : ''}</span>
-                      </span>
-                      <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="mt-2">
-                      <pre className="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto">
-                        <code>{codeReasoning.code}</code>
-                      </pre>
-                    </div>
-                  </details>
-                )}
-
-                {/* Scientific Report */}
+                {/* Render Scientific Report */}
                 {scientificReport && (
                   <ScientificReport data={scientificReport} />
                 )}
 
-                {/* Transaction Preview Card */}
-                {transactionData && (
-                  <TransactionPreviewCard
-                    transaction={transactionData}
-                    onConfirm={onTransactionConfirm}
-                    onAddToCart={onTransactionAddToCart}
-                    onCancel={onTransactionCancel}
-                  />
-                )}
-              </div>
-            )}
-
-            {!isUser && (
-              <div className="flex gap-1 mt-2 -ml-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
-                  onClick={handleCopy}
-                  title={copied ? 'Copied!' : 'Copy to clipboard'}
-                >
-                  {copied ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-500" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
+                  {/* Render Transaction Preview */}
+                  {transactionData && (
+                    <TransactionPreviewCard
+                      transaction={transactionData}
+                      onConfirm={onTransactionConfirm}
+                      onAddToCart={onTransactionAddToCart}
+                      onCancel={onTransactionCancel}
+                    />
                   )}
-                </Button>
-              </div>
-            )}
+                </div>
+              )}
+            </>
+          )}
 
-            {showSources && message.sources && (
-              <Accordion type="single" collapsible className="w-full mt-2">
-                <AccordionItem value="sources" className="border-b-0 border-t border-border/50 pt-1">
-                  <AccordionTrigger className="text-xs py-2 justify-start gap-2 hover:no-underline text-muted-foreground hover:text-foreground">
-                    <FileText className="w-3 h-3 text-indigo-500" />
-                    View Sources ({message.sources.length})
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {message.sources?.map((source, index) => (
-                        <Card
-                          key={index}
-                          className="bg-secondary/50 border-0 transition-all duration-200 hover:bg-secondary hover:shadow-sm hover:scale-[1.02] cursor-pointer"
-                        >
-                          <CardContent className="p-3">
-                            <p className="text-xs font-medium truncate">
-                              {source.metadata?.source ||
-                                source.metadata?.filename ||
-                                'Document'}
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              Chunk {index + 1}
-                            </p>
-                          </CardContent>
-                        </Card>
-                      ))}
+          {/* Copy Action Button */}
+          {!isUser && !isLoading && (
+            <div className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-[11px] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 px-2 gap-1.5"
+                onClick={handleCopy}
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? 'Copied!' : 'Copy'}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Grounded Sources Accordion */}
+        {showSources && (
+          <div className="w-full mt-1">
+            <Accordion type="single" collapsible className="w-full">
+              <AccordionItem value="sources" className="border-none">
+                <AccordionTrigger className="py-1 px-2 hover:no-underline text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200">
+                  <div className="flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>Grounded Sources ({message.sources!.length})</span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pt-2 pb-1 px-2 space-y-2">
+                  {message.sources!.map((source, idx) => (
+                    <div
+                      key={idx}
+                      className="p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between font-semibold text-slate-700 dark:text-slate-300">
+                        <span className="truncate max-w-[200px] sm:max-w-xs">{source.metadata?.filename || source.metadata?.source || `Source ${idx + 1}`}</span>
+                        {source.metadata?.page && <span className="text-[10px] text-slate-400">Page {source.metadata.page}</span>}
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2 leading-snug">
+                        {source.pageContent}
+                      </p>
                     </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
-            )}
-          </>
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </div>
         )}
       </div>
-
-      {/* User Avatar */}
-      {isUser && (
-        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center shrink-0 shadow-md mt-0.5">
-          <User className="w-4 h-4 text-white" />
-        </div>
-      )}
     </div>
   );
 }

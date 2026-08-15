@@ -145,28 +145,35 @@ export async function POST(req: Request) {
     const queryLower = message.toLowerCase().trim();
 
     const isDiagramQuery =
-      queryLower.includes('flowchart') ||
       queryLower.includes('diagram') ||
+      queryLower.includes('flowchart') ||
+      queryLower.includes('flow chart') ||
       queryLower.includes('architecture') ||
+      queryLower.includes('schema') ||
       queryLower.includes('er diagram') ||
       queryLower.includes('class diagram') ||
       queryLower.includes('sequence diagram') ||
       queryLower.includes('mindmap') ||
+      queryLower.includes('mind map') ||
       queryLower.includes('process map') ||
-      queryLower.includes('workflow map') ||
+      queryLower.includes('workflow') ||
       queryLower.includes('draw a chart') ||
-      queryLower.includes('visualize process');
+      queryLower.includes('visualize') ||
+      queryLower.includes('block diagram') ||
+      queryLower.includes('pipeline diagram');
 
     const isImageQuery =
-      queryLower.includes('create an image') ||
-      queryLower.includes('generate image') ||
-      queryLower.includes('generate an image') ||
-      queryLower.includes('visual image') ||
-      queryLower.includes('create a visual') ||
-      queryLower.includes('draw an illustration') ||
-      queryLower.includes('create an illustration') ||
-      queryLower.includes('picture explaining') ||
-      queryLower.includes('visual explanation');
+      !isDiagramQuery && (
+        queryLower.includes('image') ||
+        queryLower.includes('picture') ||
+        queryLower.includes('illustration') ||
+        queryLower.includes('draw an illustration') ||
+        queryLower.includes('visual image') ||
+        queryLower.includes('create a visual') ||
+        queryLower.includes('generate visual') ||
+        queryLower.includes('photo') ||
+        queryLower.includes('artwork')
+      );
 
     const isExplicitSourceRequested =
       queryLower.includes('show me the mermaid') ||
