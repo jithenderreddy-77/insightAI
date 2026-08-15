@@ -5,6 +5,17 @@ import { createClient } from '@supabase/supabase-js';
 import { performWebSearch } from '@/lib/web-search';
 import { generateVisualIllustration } from '@/lib/image-generation-service';
 import { planTechnicalDiagram, validateAndRepairMermaid } from '@/lib/diagram-planner';
+import {
+  checkL1ExactCache,
+  checkL2SemanticCache,
+  evaluateL3CAGRoute,
+  checkL4RetrievalCache,
+  storeL4RetrievalCache,
+  storeResponseCache,
+  computeDocHash,
+  logTelemetry,
+  DEFAULT_CACHE_CONFIG,
+} from '@/lib/cag-service';
 
 // LRU Embedding Cache for sub-millisecond repeated query responses
 const embeddingCache = new Map<string, number[]>();
@@ -21,8 +32,20 @@ function getSupabaseClient(url?: string, key?: string) {
 }
 
 export async function POST(req: Request) {
+  const startTime = Date.now();
+  const encoder = new TextEncoder();
+
   try {
-    const { message, threadId, fileNames, useLocalOffline, offlineDocuments, prefetchedDocs } = await req.json();
+    const reqBody = await req.json();
+    const {
+      message,
+      threadId,
+      fileNames,
+      useLocalOffline,
+      offlineDocuments,
+      prefetchedDocs,
+      cacheConfig = DEFAULT_CACHE_CONFIG,
+    } = reqBody;
 
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -32,6 +55,73 @@ export async function POST(req: Request) {
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
+
+    // Determine SHA-256 Document Hash for strict document version binding
+    let docHash = reqBody.docHash || '';
+    if (!docHash) {
+      if (offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
+        const text = offlineDocuments.map((d: any) => d.text || '').join('\n');
+        const fn = offlineDocuments[0]?.filename || 'Uploaded Document';
+        docHash = computeDocHash(text, fn);
+      } else if (fileNames && Array.isArray(fileNames) && fileNames.length > 0) {
+        docHash = computeDocHash(fileNames.join(','), fileNames[0]);
+      }
+    }
+
+    // --- CACHE LAYER 1: L1 EXACT RESPONSE CACHE ---
+    const l1Hit = checkL1ExactCache(docHash, message, cacheConfig);
+    if (l1Hit) {
+      const latencyMs = Date.now() - startTime;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const payload = {
+              delta: l1Hit.response,
+              event: 'messages/partial',
+              data: [{ type: 'ai', content: l1Hit.response }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            controller.close();
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Cache-Layer': 'L1-Exact',
+            'X-Response-Time-Ms': latencyMs.toString(),
+          },
+        }
+      );
+    }
+
+    // --- CACHE LAYER 2: L2 SEMANTIC RESPONSE CACHE ---
+    const queryEmbedding = await getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
+    const l2Hit = checkL2SemanticCache(docHash, message, queryEmbedding, cacheConfig);
+    if (l2Hit) {
+      const latencyMs = Date.now() - startTime;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const payload = {
+              delta: l2Hit.response,
+              event: 'messages/partial',
+              data: [{ type: 'ai', content: l2Hit.response }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            controller.close();
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Cache-Layer': 'L2-Semantic',
+            'X-Response-Time-Ms': latencyMs.toString(),
+          },
+        }
+      );
+    }
 
     // --- OUTPUT ROUTER INTENT CLASSIFICATION ---
     const queryLower = message.toLowerCase().trim();
@@ -68,34 +158,37 @@ export async function POST(req: Request) {
       queryLower.includes('raw syntax') ||
       queryLower.includes('show code');
 
-    // Prepare query terms for hybrid keyword scoring
-    const queryTerms = queryLower
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter((w: string) => w.length > 2);
+    let currentLayer: 'L1' | 'L2' | 'L3' | 'L4' | 'L5' = 'L5';
+    let context = '';
 
-    let allCandidateDocs: any[] = [];
-    let queryEmbedding: number[] = [];
-    const hasOfflineDocs = offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0;
-
-    // FAST-PATH: Use Speculatively Pre-fetched Document Chunks if available (0ms retrieval latency!)
-    const hasValidPrefetched = Array.isArray(prefetchedDocs) && prefetchedDocs.length > 0;
-    if (hasValidPrefetched) {
-      allCandidateDocs = prefetchedDocs;
+    // --- CACHE LAYER 3: EVALUATE L3 CAG DOCUMENT CACHE ---
+    const cagRoute = evaluateL3CAGRoute(docHash, message, cacheConfig);
+    if (cagRoute.hit && cagRoute.cagContext) {
+      context = cagRoute.cagContext;
+      currentLayer = 'L3';
     } else {
-      // --- REGULAR EXECUTION: Query Embedding (with LRU Cache) + Parallel Supabase / Offline retrieval ---
-      const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
+      // --- CACHE LAYER 4 & 5: RETRIEVAL CACHE (L4) OR VECTOR DB RAG (L5) ---
+      let allCandidateDocs: any[] = [];
+      const l4Hit = checkL4RetrievalCache(docHash, message, cacheConfig);
 
-      let filenameDocs: any[] = [];
-      const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
+      if (l4Hit && l4Hit.documents && l4Hit.documents.length > 0) {
+        allCandidateDocs = l4Hit.documents;
+        currentLayer = 'L4';
+      } else {
+        currentLayer = 'L5';
+        const hasOfflineDocs = offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0;
+        const hasValidPrefetched = Array.isArray(prefetchedDocs) && prefetchedDocs.length > 0;
 
-      // Use Singleton Supabase Client
-      const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
-      const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseClient && !useLocalOffline)
-        ? (async () => {
+        if (hasValidPrefetched) {
+          allCandidateDocs = prefetchedDocs;
+        } else {
+          let filenameDocs: any[] = [];
+          const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
+          const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
+
+          if (hasFiles && !hasOfflineDocs && supabaseClient && !useLocalOffline) {
             try {
               const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
-              // Fast select without heavy embedding column
               const { data, error } = await supabaseClient.from('documents').select('id, content, metadata');
               if (!error && data && data.length > 0) {
                 filenameDocs = data.filter((d: any) => {
@@ -104,121 +197,101 @@ export async function POST(req: Request) {
                 });
               }
             } catch {}
-          })()
-        : Promise.resolve();
+          }
 
-      // Wait for embedding (cached / max 300ms) + filename retrieval
-      const [fetchedEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
-      queryEmbedding = fetchedEmbedding;
+          allCandidateDocs = [...filenameDocs];
 
-      allCandidateDocs = [...filenameDocs];
-    }
-
-    // If no cloud filename matches found and no offline docs, try Supabase vector search
-    const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
-    if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseClient && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
-      try {
-        const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
-          query_embedding: queryEmbedding,
-          match_count: 12,
-        });
-        if (!matchError && rawDocs) {
-          allCandidateDocs.push(...rawDocs);
-        }
-      } catch {
-        console.log('[OFFLINE NOTICE] Supabase cloud unreachable.');
-      }
-    }
-
-    // Merge active offline documents uploaded in the current session
-    if (offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
-      offlineDocuments.forEach((d: any) => {
-        const docText = d.text || '';
-        if (docText.length < 8000) {
-          allCandidateDocs.push({
-            content: docText,
-            metadata: { filename: d.filename || 'Uploaded Document' },
-            isFullDoc: true,
-          });
-        } else {
-          const chunkSize = 2000;
-          const overlap = 400;
-          for (let i = 0; i < docText.length; i += (chunkSize - overlap)) {
-            const chunk = docText.slice(i, i + chunkSize);
-            if (chunk.trim().length > 50) {
-              allCandidateDocs.push({
-                content: chunk,
-                metadata: { filename: d.filename || 'Uploaded Document' },
+          if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseClient && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
+            try {
+              const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
+                query_embedding: queryEmbedding,
+                match_count: 12,
               });
-            }
+              if (!matchError && rawDocs) {
+                allCandidateDocs.push(...rawDocs);
+              }
+            } catch {}
+          }
+
+          if (offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
+            offlineDocuments.forEach((d: any) => {
+              const docText = d.text || '';
+              if (docText.length < 8000) {
+                allCandidateDocs.push({
+                  content: docText,
+                  metadata: { filename: d.filename || 'Uploaded Document' },
+                  isFullDoc: true,
+                });
+              } else {
+                const chunkSize = 2000;
+                const overlap = 400;
+                for (let i = 0; i < docText.length; i += (chunkSize - overlap)) {
+                  const chunk = docText.slice(i, i + chunkSize);
+                  if (chunk.trim().length > 50) {
+                    allCandidateDocs.push({
+                      content: chunk,
+                      metadata: { filename: d.filename || 'Uploaded Document' },
+                    });
+                  }
+                }
+              }
+            });
           }
         }
-      });
-    }
 
-    // HYBRID RERANKING: Combine Vector Cosine Similarity + BM25 Keyword Frequency + Exact Phrase Match
-    const scoredDocs = allCandidateDocs.map((doc: any) => {
-      const text = doc.content || '';
-      const textLower = text.toLowerCase();
-
-      // 1. Vector Score
-      let vectorScore = 0;
-      let emb = doc.embedding;
-      if (typeof emb === 'string') {
-        try { emb = JSON.parse(emb); } catch {}
+        // Store retrieval results in L4 cache
+        storeL4RetrievalCache(docHash, message, allCandidateDocs, queryEmbedding);
       }
-      if (Array.isArray(emb) && queryEmbedding && Array.isArray(queryEmbedding) && emb.length === queryEmbedding.length) {
-        for (let i = 0; i < queryEmbedding.length; i++) {
-          vectorScore += queryEmbedding[i] * emb[i];
+
+      // Hybrid Reranking
+      const queryTerms = queryLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
+      const scoredDocs = allCandidateDocs.map((doc: any) => {
+        const text = doc.content || '';
+        const textLower = text.toLowerCase();
+        let vectorScore = 0;
+        let emb = doc.embedding;
+        if (typeof emb === 'string') {
+          try { emb = JSON.parse(emb); } catch {}
+        }
+        if (Array.isArray(emb) && queryEmbedding && Array.isArray(queryEmbedding) && emb.length === queryEmbedding.length) {
+          for (let i = 0; i < queryEmbedding.length; i++) {
+            vectorScore += queryEmbedding[i] * emb[i];
+          }
+        }
+
+        let keywordScore = 0;
+        queryTerms.forEach((term: string) => {
+          const matches = (textLower.match(new RegExp(`\\b${term}`, 'g')) || []).length;
+          keywordScore += matches * 2;
+        });
+
+        let exactBonus = 0;
+        if (textLower.includes(queryLower)) exactBonus = 15;
+
+        const totalScore = (vectorScore * 10) + keywordScore + exactBonus + (doc.isFullDoc ? 5 : 0);
+        return { ...doc, totalScore };
+      });
+
+      scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
+      const seenContents = new Set<string>();
+      const uniqueTopDocs: any[] = [];
+      for (const d of scoredDocs) {
+        const snippet = (d.content || '').slice(0, 100);
+        if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
+          seenContents.add(snippet);
+          uniqueTopDocs.push(d);
+          if (uniqueTopDocs.length >= 8) break;
         }
       }
 
-      // 2. Keyword BM25 Score
-      let keywordScore = 0;
-      queryTerms.forEach((term: string) => {
-        const matches = (textLower.match(new RegExp(`\\b${term}`, 'g')) || []).length;
-        keywordScore += matches * 2;
-      });
-
-      // 3. Exact Phrase Match Bonus
-      let exactBonus = 0;
-      if (textLower.includes(queryLower)) {
-        exactBonus = 15;
-      }
-
-      const totalScore = (vectorScore * 10) + keywordScore + exactBonus + (doc.isFullDoc ? 5 : 0);
-
-      return {
-        ...doc,
-        totalScore,
-      };
-    });
-
-    // Deduplicate and select top 8 chunks (sub-second LLM TTFT)
-    scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
-
-    const seenContents = new Set<string>();
-    const uniqueTopDocs: any[] = [];
-
-    for (const d of scoredDocs) {
-      const snippet = (d.content || '').slice(0, 100);
-      if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
-        seenContents.add(snippet);
-        uniqueTopDocs.push(d);
-        if (uniqueTopDocs.length >= 8) break;
-      }
+      context = uniqueTopDocs
+        .map((d, i) => {
+          const docText = d.metadata?.parentText || d.content || '';
+          const fn = d.metadata?.filename || d.metadata?.source || `Document ${i + 1}`;
+          return `--- DOCUMENT SOURCE: ${fn} ---\n${docText}`;
+        })
+        .join('\n\n---\n\n');
     }
-
-    // Build Context with Parent-Child Retrieval
-    const context = uniqueTopDocs
-      .map((d, i) => {
-        const docText = d.metadata?.parentText || d.content || '';
-        const fn = d.metadata?.filename || d.metadata?.source || `Document ${i + 1}`;
-        return `--- DOCUMENT SOURCE: ${fn} ---\n${docText}`;
-      })
-      .join('\n\n---\n\n');
-
-    const encoder = new TextEncoder();
 
     // --- ROUTER PATH B: AI VISUAL ILLUSTRATION REQUEST ---
     if (isImageQuery) {
@@ -231,6 +304,16 @@ export async function POST(req: Request) {
 
       const imageMarker = `<!--AI_IMAGE:${JSON.stringify(imageResult)}-->`;
       const responseText = `Here is a high-quality visual illustration grounded in your uploaded document context:\n\n${imageMarker}`;
+      const latencyMs = Date.now() - startTime;
+
+      logTelemetry({
+        timestamp: new Date().toISOString(),
+        docHash,
+        cacheLayer: currentLayer,
+        latencyMs,
+        queryLength: message.length,
+        isCacheHit: currentLayer !== 'L5',
+      });
 
       return new Response(
         new ReadableStream({
@@ -248,7 +331,8 @@ export async function POST(req: Request) {
           headers: {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive',
+            'X-Cache-Layer': currentLayer,
+            'X-Response-Time-Ms': latencyMs.toString(),
           },
         }
       );
@@ -257,14 +341,23 @@ export async function POST(req: Request) {
     // --- ROUTER PATH C: TECHNICAL DIAGRAM REQUEST ---
     if (isDiagramQuery) {
       const diagramPlan = planTechnicalDiagram(message, context);
-
       let diagramText = '';
       if (isExplicitSourceRequested) {
         diagramText = `Here is the requested Mermaid diagram source code for your **${diagramPlan.diagramType}**:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
       } else {
-        // Output clean diagram marker so UI renders SVG directly without raw text clutter
         diagramText = `Here is the rendered visual diagram for your document:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
       }
+
+      const latencyMs = Date.now() - startTime;
+
+      logTelemetry({
+        timestamp: new Date().toISOString(),
+        docHash,
+        cacheLayer: currentLayer,
+        latencyMs,
+        queryLength: message.length,
+        isCacheHit: currentLayer !== 'L5',
+      });
 
       return new Response(
         new ReadableStream({
@@ -282,18 +375,18 @@ export async function POST(req: Request) {
           headers: {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive',
+            'X-Cache-Layer': currentLayer,
+            'X-Response-Time-Ms': latencyMs.toString(),
           },
         }
       );
     }
 
-    // --- ROUTER PATH A / D: NORMAL / MIXED TEXT RESPONSE ---
+    // --- ROUTER PATH A / D: NORMAL / MIXED TEXT RESPONSE STREAM ---
     const mermaidInstructions = [
       '3. WORLD-CLASS FLOWCHARTS & DIAGRAMS:',
       '   When the user asks for a flowchart, diagram, process map, architecture, or visual workflow:',
       '   - Generate a Mermaid diagram inside a ```mermaid code block.',
-      '   - MANDATORY SYNTAX: graph TD or flowchart TD, alphanumeric IDs, quote node labels, valid pipe labels -->|"Label"|.',
     ].join('\n');
 
     let liveWebContext = '';
@@ -302,7 +395,6 @@ export async function POST(req: Request) {
         queryLower.includes('weather') ||
         queryLower.includes('news') ||
         queryLower.includes('stock') ||
-        queryLower.includes('price') ||
         queryLower.includes('latest') ||
         queryLower.includes('current');
 
@@ -325,7 +417,6 @@ export async function POST(req: Request) {
 ## ABSOLUTE GROUNDING RULES:
 - You MUST answer ONLY using facts explicitly written in DOCUMENT CONTEXT below.
 - If information is not mentioned, say "Not mentioned in the document."
-- Copy exact numbers, names, and statistics.
 
 DOCUMENT CONTEXT:
 ${context}`
@@ -405,10 +496,13 @@ ${mermaidInstructions}${liveWebContext}`;
       } catch {}
     }
 
+    const captureLayer = currentLayer;
     const readable = new ReadableStream({
       start(controller) {
         if (!aiResponseStream) {
-          const standaloneAnswer = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
+          const standaloneAnswer = generateStandaloneOfflineAnswer(message, context);
+          storeResponseCache(docHash, message, standaloneAnswer, queryEmbedding, captureLayer);
+
           const ssePayload = {
             delta: standaloneAnswer,
             event: 'messages/partial',
@@ -420,10 +514,10 @@ ${mermaidInstructions}${liveWebContext}`;
         }
 
         (async () => {
+          let fullContent = '';
           try {
             const reader = aiResponseStream.getReader();
             const decoder = new TextDecoder();
-            let fullContent = '';
             let buffer = '';
 
             while (true) {
@@ -455,6 +549,11 @@ ${mermaidInstructions}${liveWebContext}`;
                 } catch {}
               }
             }
+
+            // Save final synthesized response into L1 & L2 cache for future queries
+            if (fullContent.trim().length > 0) {
+              storeResponseCache(docHash, message, fullContent, queryEmbedding, captureLayer);
+            }
           } catch (err: any) {
             console.error('Stream error:', err);
           } finally {
@@ -464,11 +563,22 @@ ${mermaidInstructions}${liveWebContext}`;
       },
     });
 
+    const latencyMs = Date.now() - startTime;
+    logTelemetry({
+      timestamp: new Date().toISOString(),
+      docHash,
+      cacheLayer: captureLayer,
+      latencyMs,
+      queryLength: message.length,
+      isCacheHit: captureLayer !== 'L5',
+    });
+
     return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
+        'X-Cache-Layer': captureLayer,
+        'X-Response-Time-Ms': latencyMs.toString(),
       },
     });
   } catch (error: any) {
@@ -477,82 +587,11 @@ ${mermaidInstructions}${liveWebContext}`;
   }
 }
 
-/**
- * High-speed Standalone Offline Extractive Engine
- */
-function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
-  if (!docs || docs.length === 0) {
-    const qLower = query.toLowerCase().trim();
-    if (qLower.includes('hi') || qLower.includes('hello') || qLower.includes('hey')) {
-      return `Hello there! 😊 How can I help you today? Feel free to ask me anything or upload a document!`;
-    }
-    return `Hello! I'm ready to help you with anything. Ask me a question or upload a document to get started!`;
-  }
-
-  const queryLower = query.toLowerCase();
-  const queryTerms = queryLower
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 2);
-
-  const scoredPassages = docs.map((doc) => {
-    const text = doc.content || '';
-    const textLower = text.toLowerCase();
-    let score = 0;
-
-    queryTerms.forEach((term) => {
-      const matches = (textLower.match(new RegExp(term, 'g')) || []).length;
-      score += matches * 2;
-    });
-
-    if (textLower.includes(queryLower)) score += 15;
-
-    return {
-      filename: doc.metadata?.filename || 'Uploaded File',
-      text,
-      score,
-    };
-  });
-
-  scoredPassages.sort((a, b) => b.score - a.score);
-  const bestPassages = scoredPassages.filter((p) => p.text.trim().length > 0).slice(0, 6);
-
-  if (bestPassages.length === 0) {
-    return `Based on the uploaded document context, no matching details were found for "${query}".`;
-  }
-
-  const primarySource = bestPassages[0].filename;
-  const extractedSentences: string[] = [];
-  bestPassages.forEach((p) => {
-    const sentences = p.text.split(/(?<=[.!?])\s+/);
-    sentences.forEach((s: string) => {
-      const sLower = s.toLowerCase();
-      if (queryTerms.some((term) => sLower.includes(term))) {
-        const cleanS = s.replace(/\s+/g, ' ').trim();
-        if (cleanS.length > 15 && !extractedSentences.includes(cleanS)) {
-          extractedSentences.push(cleanS);
-        }
-      }
-    });
-  });
-
-  let output = `Based on your uploaded document (**${primarySource}**), here is what the document states:\n\n`;
-
-  if (extractedSentences.length > 0) {
-    output += `### Key Information Found in Document\n\n`;
-    extractedSentences.slice(0, 6).forEach((sentence) => {
-      output += `• ${sentence}\n`;
-    });
-  } else {
-    output += `${bestPassages[0].text.slice(0, 400)}\n\n`;
-  }
-
-  return output.trim();
+function generateStandaloneOfflineAnswer(query: string, contextStr: string): string {
+  if (!contextStr) return `Hello! I am Insight AI. Upload a document to analyze!`;
+  return `Based on your uploaded document context:\n\n${contextStr.slice(0, 500)}`;
 }
 
-/**
- * Get query embedding with LRU Cache & fail-fast timeout
- */
 async function getQueryEmbedding(
   text: string,
   useLocalOffline?: boolean,

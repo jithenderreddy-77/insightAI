@@ -15,6 +15,7 @@ import { OpenAIEmbeddings } from '@langchain/openai';
 import { SupabaseVectorStore } from '@langchain/community/vectorstores/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { computeDocHash, buildCAGDocumentCache, invalidateDocCache } from '@/lib/cag-service';
 
 // Configuration constants — Supports up to 2GB files and 1000 files per batch
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB per file
@@ -139,6 +140,17 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+
+    // --- SHA-256 DOCUMENT FINGERPRINTING & L3 CAG DOCUMENT CACHE ---
+    const concatenatedText = allDocs.map((d) => d.pageContent).join('\n\n');
+    const primaryFilename = allDocs[0]?.metadata?.filename || allDocs[0]?.metadata?.source || 'Uploaded Document';
+    const docHash = computeDocHash(concatenatedText, primaryFilename);
+
+    // Invalidate stale caches for this document version
+    invalidateDocCache(docHash);
+
+    // Precompute L3 CAG Cache
+    const cagDocCache = buildCAGDocumentCache(docHash, primaryFilename, concatenatedText);
 
     // --- PARENT-CHILD SEMANTIC CHUNKING ARCHITECTURE ---
     // Parent Splitter (1,500 chars) = Full surrounding context for LLM
@@ -289,6 +301,8 @@ export async function POST(request: NextRequest) {
       message: cloudIngested
         ? 'Documents ingested successfully to Cloud Vector DB'
         : 'Documents parsed & indexed 100% offline successfully',
+      docHash,
+      cagSummary: cagDocCache?.summary,
       documentCount: splitDocs.length,
       isOfflineMode: !cloudIngested,
       parsedDocuments: offlineParsedDocuments,
