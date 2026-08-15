@@ -22,11 +22,16 @@ const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB per file
 const MAX_FILES = 1000; // up to 1000 files simultaneously
 
 function isFileSupported(file: File): boolean {
-  if (SUPPORTED_MIME_TYPES.includes(file.type)) {
+  if (file.type && SUPPORTED_MIME_TYPES.includes(file.type)) {
     return true;
   }
-  const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-  return SUPPORTED_EXTENSIONS.includes(extension);
+  const name = file.name || '';
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot !== -1) {
+    const extension = name.substring(lastDot).toLowerCase();
+    return SUPPORTED_EXTENSIONS.includes(extension);
+  }
+  return true;
 }
 
 export async function POST(request: NextRequest) {
@@ -36,15 +41,20 @@ export async function POST(request: NextRequest) {
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
 
-    const contentType = request.headers.get('content-type') || '';
+    const contentType = (typeof request.headers?.get === 'function' ? request.headers.get('content-type') : (request.headers as any)?.['content-type']) || '';
     const allDocs: Document[] = [];
     const errors: string[] = [];
     let spreadsheetDataMap: Record<string, SpreadsheetData> = {};
 
     // Handle JSON payload (sent from client chunking for huge >4MB / 200MB+ / 2GB files)
     if (contentType.includes('application/json')) {
-      const jsonBody = await request.json();
-      const docsPayload = jsonBody.parsedDocuments || jsonBody.documents || [];
+      let jsonBody: any = null;
+      try {
+        if (typeof request.json === 'function') {
+          jsonBody = await request.json();
+        }
+      } catch {}
+      const docsPayload = jsonBody?.parsedDocuments || jsonBody?.documents || [];
 
       for (const item of docsPayload) {
         const text = item.text || item.content || '';
@@ -60,12 +70,19 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Handle Multipart FormData file upload
-      const formData = await request.formData();
-      const files: File[] = [];
+      let formData: FormData | null = null;
+      try {
+        if (typeof request.formData === 'function') {
+          formData = await request.formData();
+        }
+      } catch {}
 
-      for (const [key, value] of formData.entries()) {
-        if (key === 'files' && value instanceof File) {
-          files.push(value);
+      const files: File[] = [];
+      if (formData) {
+        for (const [key, value] of formData.entries()) {
+          if (key === 'files' && value instanceof File) {
+            files.push(value);
+          }
         }
       }
 

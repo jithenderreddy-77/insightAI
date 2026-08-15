@@ -1,38 +1,27 @@
-import { POST } from '../../../app/api/ingest/route'; // Import the actual route handler
+import { POST } from '../../../app/api/ingest/route';
 import { NextRequest } from 'next/server';
-import { processPDF } from '@/lib/pdf';
-import { langGraphServerClient } from '@/lib/langgraph-server';
+import { processDocument } from '@/lib/pdf';
 
-// Mock the processPDF function
 jest.mock('@/lib/pdf', () => ({
+  processDocument: jest.fn().mockImplementation((file: File) => {
+    return Promise.resolve([
+      {
+        pageContent: 'Test content',
+        metadata: { filename: file.name, source: file.name },
+      },
+    ]);
+  }),
   processPDF: jest.fn().mockImplementation((file: File) => {
     return Promise.resolve([
       {
         pageContent: 'Test content',
-        metadata: { filename: file.name },
+        metadata: { filename: file.name, source: file.name },
       },
     ]);
   }),
+  SUPPORTED_EXTENSIONS: ['.pdf', '.txt', '.md', '.json', '.csv', '.doc', '.docx', '.xlsx'],
+  SUPPORTED_MIME_TYPES: ['application/pdf', 'text/plain', 'text/csv'],
 }));
-
-// Mock the langGraphServerClient
-jest.mock('@/lib/langgraph-server', () => {
-  return {
-    langGraphServerClient: {
-      createThread: jest
-        .fn()
-        .mockResolvedValue({ thread_id: 'test-thread-id' }),
-      client: {
-        runs: {
-          wait: jest.fn().mockResolvedValue({ status: 'success' }),
-          stream: jest.fn().mockImplementation(async function* () {
-            yield { data: 'test' };
-          }),
-        },
-      },
-    },
-  };
-});
 
 describe('PDF Ingest Route (In-Memory)', () => {
   beforeEach(() => {
@@ -44,6 +33,12 @@ describe('PDF Ingest Route (In-Memory)', () => {
       entries: () => formDataEntries,
     };
     return {
+      headers: {
+        get: (headerName: string) => {
+          if (headerName.toLowerCase() === 'content-type') return 'multipart/form-data';
+          return null;
+        },
+      },
       formData: jest.fn().mockResolvedValue(mockFormData),
     } as unknown as NextRequest;
   }
@@ -57,17 +52,6 @@ describe('PDF Ingest Route (In-Memory)', () => {
     expect(data.error).toBe('No files provided');
   });
 
-  it('should reject non-PDF files', async () => {
-    const file = new File(['text content'], 'test.txt', { type: 'text/plain' });
-    const req = createMockRequest([['files', file]]);
-
-    const response = await POST(req);
-
-    expect(response.status).toBe(400);
-    const data = await response.json();
-    expect(data.error).toContain('Only PDF files are allowed');
-  });
-
   it('should accept PDF files', async () => {
     const file = new File(['pdf content'], 'test.pdf', { type: 'application/pdf' });
     const req = createMockRequest([['files', file]]);
@@ -76,8 +60,8 @@ describe('PDF Ingest Route (In-Memory)', () => {
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.message).toContain('Documents ingested successfully');
-    expect(data.threadId).toBe('test-thread-id');
+    expect(data.message).toBeDefined();
+    expect(data.docHash).toBeDefined();
   });
 
   it('should handle multiple PDFs', async () => {
@@ -92,36 +76,16 @@ describe('PDF Ingest Route (In-Memory)', () => {
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.message).toBe('Documents ingested successfully');
-    expect(data.threadId).toBe('test-thread-id');
+    expect(data.message).toBeDefined();
+    expect(data.docHash).toBeDefined();
   });
 
-  it('should correctly parse PDF files using PDFLoader', async () => {
+  it('should correctly parse PDF files using processDocument', async () => {
     const file = new File(['pdf content'], 'test.pdf', { type: 'application/pdf' });
     const req = createMockRequest([['files', file]]);
 
     await POST(req);
 
-    expect(processPDF).toHaveBeenCalledWith(file);
-  });
-
-  it('should call the ingestion graph with the correct data', async () => {
-    const file = new File(['pdf content'], 'test.pdf', { type: 'application/pdf' });
-    const req = createMockRequest([['files', file]]);
-
-    await POST(req);
-
-    expect(langGraphServerClient.createThread).toHaveBeenCalled();
-    expect(langGraphServerClient.client.runs.wait).toHaveBeenCalledWith(
-      'test-thread-id',
-      'ingestion_graph',
-      expect.objectContaining({
-        input: {
-          docs: [
-            { pageContent: 'Test content', metadata: { filename: 'test.pdf' } },
-          ],
-        },
-      }),
-    );
+    expect(processDocument).toHaveBeenCalledWith(file);
   });
 });

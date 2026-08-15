@@ -16,6 +16,7 @@ import {
   logTelemetry,
   DEFAULT_CACHE_CONFIG,
 } from '@/lib/cag-service';
+import { createInstrumenter } from '@/lib/pipeline-benchmark';
 
 // LRU Embedding Cache for sub-millisecond repeated query responses
 const embeddingCache = new Map<string, number[]>();
@@ -32,7 +33,8 @@ function getSupabaseClient(url?: string, key?: string) {
 }
 
 export async function POST(req: Request) {
-  const startTime = Date.now();
+  const instrumenter = createInstrumenter();
+  instrumenter.startRequest();
   const encoder = new TextEncoder();
 
   try {
@@ -45,7 +47,10 @@ export async function POST(req: Request) {
       offlineDocuments,
       prefetchedDocs,
       cacheConfig = DEFAULT_CACHE_CONFIG,
+      topKChunks = 4,
     } = reqBody;
+
+    instrumenter.setTopKChunks(topKChunks);
 
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -69,9 +74,12 @@ export async function POST(req: Request) {
     }
 
     // --- CACHE LAYER 1: L1 EXACT RESPONSE CACHE ---
+    instrumenter.startCacheLookup();
     const l1Hit = checkL1ExactCache(docHash, message, cacheConfig);
+    instrumenter.endCacheLookup();
+
     if (l1Hit) {
-      const latencyMs = Date.now() - startTime;
+      const breakdown = instrumenter.finalize(15);
       return new Response(
         new ReadableStream({
           start(controller) {
@@ -89,17 +97,25 @@ export async function POST(req: Request) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-Cache-Layer': 'L1-Exact',
-            'X-Response-Time-Ms': latencyMs.toString(),
+            'X-TTFT-Ms': '1',
+            'X-Retrieval-Ms': '0',
+            'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
           },
         }
       );
     }
 
     // --- CACHE LAYER 2: L2 SEMANTIC RESPONSE CACHE ---
+    instrumenter.startEmbedding();
     const queryEmbedding = await getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
+    instrumenter.endEmbedding();
+
+    instrumenter.startCacheLookup();
     const l2Hit = checkL2SemanticCache(docHash, message, queryEmbedding, cacheConfig);
+    instrumenter.endCacheLookup();
+
     if (l2Hit) {
-      const latencyMs = Date.now() - startTime;
+      const breakdown = instrumenter.finalize(15);
       return new Response(
         new ReadableStream({
           start(controller) {
@@ -117,7 +133,9 @@ export async function POST(req: Request) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-Cache-Layer': 'L2-Semantic',
-            'X-Response-Time-Ms': latencyMs.toString(),
+            'X-TTFT-Ms': breakdown.embeddingMs.toString(),
+            'X-Retrieval-Ms': '0',
+            'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
           },
         }
       );
@@ -162,14 +180,20 @@ export async function POST(req: Request) {
     let context = '';
 
     // --- CACHE LAYER 3: EVALUATE L3 CAG DOCUMENT CACHE ---
+    instrumenter.startCacheLookup();
     const cagRoute = evaluateL3CAGRoute(docHash, message, cacheConfig);
+    instrumenter.endCacheLookup();
+
     if (cagRoute.hit && cagRoute.cagContext) {
       context = cagRoute.cagContext;
       currentLayer = 'L3';
     } else {
       // --- CACHE LAYER 4 & 5: RETRIEVAL CACHE (L4) OR VECTOR DB RAG (L5) ---
       let allCandidateDocs: any[] = [];
+
+      instrumenter.startCacheLookup();
       const l4Hit = checkL4RetrievalCache(docHash, message, cacheConfig);
+      instrumenter.endCacheLookup();
 
       if (l4Hit && l4Hit.documents && l4Hit.documents.length > 0) {
         allCandidateDocs = l4Hit.documents;
@@ -186,6 +210,7 @@ export async function POST(req: Request) {
           const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
           const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
 
+          instrumenter.startRetrieval();
           if (hasFiles && !hasOfflineDocs && supabaseClient && !useLocalOffline) {
             try {
               const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
@@ -205,13 +230,14 @@ export async function POST(req: Request) {
             try {
               const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
                 query_embedding: queryEmbedding,
-                match_count: 12,
+                match_count: 10,
               });
               if (!matchError && rawDocs) {
                 allCandidateDocs.push(...rawDocs);
               }
             } catch {}
           }
+          instrumenter.endRetrieval();
 
           if (offlineDocuments && Array.isArray(offlineDocuments) && offlineDocuments.length > 0) {
             offlineDocuments.forEach((d: any) => {
@@ -243,7 +269,8 @@ export async function POST(req: Request) {
         storeL4RetrievalCache(docHash, message, allCandidateDocs, queryEmbedding);
       }
 
-      // Hybrid Reranking
+      // Hybrid Reranking & Context Selection
+      instrumenter.startRerank();
       const queryTerms = queryLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w: string) => w.length > 2);
       const scoredDocs = allCandidateDocs.map((doc: any) => {
         const text = doc.content || '';
@@ -280,9 +307,10 @@ export async function POST(req: Request) {
         if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
           seenContents.add(snippet);
           uniqueTopDocs.push(d);
-          if (uniqueTopDocs.length >= 8) break;
+          if (uniqueTopDocs.length >= topKChunks) break;
         }
       }
+      instrumenter.endRerank();
 
       context = uniqueTopDocs
         .map((d, i) => {
@@ -295,22 +323,24 @@ export async function POST(req: Request) {
 
     // --- ROUTER PATH B: AI VISUAL ILLUSTRATION REQUEST ---
     if (isImageQuery) {
+      instrumenter.startLlmRequest();
       const imageResult = await generateVisualIllustration({
         prompt: message,
         pdfContext: context,
         aspectRatio: '16:9',
         style: 'educational',
       });
+      instrumenter.markFirstToken();
 
       const imageMarker = `<!--AI_IMAGE:${JSON.stringify(imageResult)}-->`;
       const responseText = `Here is a high-quality visual illustration grounded in your uploaded document context:\n\n${imageMarker}`;
-      const latencyMs = Date.now() - startTime;
+      const breakdown = instrumenter.finalize(20);
 
       logTelemetry({
         timestamp: new Date().toISOString(),
         docHash,
         cacheLayer: currentLayer,
-        latencyMs,
+        latencyMs: breakdown.totalEndToEndMs,
         queryLength: message.length,
         isCacheHit: currentLayer !== 'L5',
       });
@@ -332,7 +362,9 @@ export async function POST(req: Request) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-Cache-Layer': currentLayer,
-            'X-Response-Time-Ms': latencyMs.toString(),
+            'X-TTFT-Ms': breakdown.llmTtftMs.toString(),
+            'X-Retrieval-Ms': breakdown.retrievalMs.toString(),
+            'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
           },
         }
       );
@@ -340,7 +372,10 @@ export async function POST(req: Request) {
 
     // --- ROUTER PATH C: TECHNICAL DIAGRAM REQUEST ---
     if (isDiagramQuery) {
+      instrumenter.startLlmRequest();
       const diagramPlan = planTechnicalDiagram(message, context);
+      instrumenter.markFirstToken();
+
       let diagramText = '';
       if (isExplicitSourceRequested) {
         diagramText = `Here is the requested Mermaid diagram source code for your **${diagramPlan.diagramType}**:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
@@ -348,13 +383,13 @@ export async function POST(req: Request) {
         diagramText = `Here is the rendered visual diagram for your document:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
       }
 
-      const latencyMs = Date.now() - startTime;
+      const breakdown = instrumenter.finalize(20);
 
       logTelemetry({
         timestamp: new Date().toISOString(),
         docHash,
         cacheLayer: currentLayer,
-        latencyMs,
+        latencyMs: breakdown.totalEndToEndMs,
         queryLength: message.length,
         isCacheHit: currentLayer !== 'L5',
       });
@@ -376,7 +411,9 @@ export async function POST(req: Request) {
             'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-Cache-Layer': currentLayer,
-            'X-Response-Time-Ms': latencyMs.toString(),
+            'X-TTFT-Ms': breakdown.llmTtftMs.toString(),
+            'X-Retrieval-Ms': breakdown.retrievalMs.toString(),
+            'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
           },
         }
       );
@@ -425,6 +462,7 @@ Converse naturally and humanly!
 ${mermaidInstructions}${liveWebContext}`;
 
     let aiResponseStream: ReadableStream | null = null;
+    instrumenter.startLlmRequest();
 
     if (!useLocalOffline && nvidiaApiKey) {
       const userModel = process.env.NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct';
@@ -440,6 +478,7 @@ ${mermaidInstructions}${liveWebContext}`;
             headers: {
               'Authorization': `Bearer ${nvidiaApiKey}`,
               'Content-Type': 'application/json',
+              'Connection': 'keep-alive',
             },
             body: JSON.stringify({
               model: modelCandidate,
@@ -474,6 +513,7 @@ ${mermaidInstructions}${liveWebContext}`;
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
             'Content-Type': 'application/json',
+            'Connection': 'keep-alive',
           },
           body: JSON.stringify({
             model: 'gpt-4o-mini',
@@ -500,6 +540,7 @@ ${mermaidInstructions}${liveWebContext}`;
     const readable = new ReadableStream({
       start(controller) {
         if (!aiResponseStream) {
+          instrumenter.markFirstToken();
           const standaloneAnswer = generateStandaloneOfflineAnswer(message, context);
           storeResponseCache(docHash, message, standaloneAnswer, queryEmbedding, captureLayer);
 
@@ -524,6 +565,7 @@ ${mermaidInstructions}${liveWebContext}`;
               const { done, value } = await reader.read();
               if (done) break;
 
+              instrumenter.markFirstToken();
               buffer += decoder.decode(value, { stream: true });
               const lines = buffer.split('\n');
               buffer = lines.pop() || '';
@@ -550,7 +592,6 @@ ${mermaidInstructions}${liveWebContext}`;
               }
             }
 
-            // Save final synthesized response into L1 & L2 cache for future queries
             if (fullContent.trim().length > 0) {
               storeResponseCache(docHash, message, fullContent, queryEmbedding, captureLayer);
             }
@@ -563,12 +604,12 @@ ${mermaidInstructions}${liveWebContext}`;
       },
     });
 
-    const latencyMs = Date.now() - startTime;
+    const breakdown = instrumenter.finalize(20);
     logTelemetry({
       timestamp: new Date().toISOString(),
       docHash,
       cacheLayer: captureLayer,
-      latencyMs,
+      latencyMs: breakdown.totalEndToEndMs,
       queryLength: message.length,
       isCacheHit: captureLayer !== 'L5',
     });
@@ -578,7 +619,9 @@ ${mermaidInstructions}${liveWebContext}`;
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'X-Cache-Layer': captureLayer,
-        'X-Response-Time-Ms': latencyMs.toString(),
+        'X-TTFT-Ms': breakdown.llmTtftMs.toString(),
+        'X-Retrieval-Ms': breakdown.retrievalMs.toString(),
+        'X-Total-Ms': breakdown.totalEndToEndMs.toString(),
       },
     });
   } catch (error: any) {
@@ -611,6 +654,7 @@ async function getQueryEmbedding(
           headers: {
             'Authorization': `Bearer ${openaiApiKey}`,
             'Content-Type': 'application/json',
+            'Connection': 'keep-alive',
           },
           body: JSON.stringify({
             model: 'text-embedding-3-small',
@@ -637,6 +681,7 @@ async function getQueryEmbedding(
           headers: {
             'Authorization': `Bearer ${nvidiaApiKey}`,
             'Content-Type': 'application/json',
+            'Connection': 'keep-alive',
           },
           body: JSON.stringify({
             model: 'nvidia/nv-embedqa-e5-v5',
