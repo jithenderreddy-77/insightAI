@@ -3,6 +3,22 @@ export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { performWebSearch } from '@/lib/web-search';
+import { generateVisualIllustration } from '@/lib/image-generation-service';
+import { planTechnicalDiagram, validateAndRepairMermaid } from '@/lib/diagram-planner';
+
+// LRU Embedding Cache for sub-millisecond repeated query responses
+const embeddingCache = new Map<string, number[]>();
+const MAX_EMBEDDING_CACHE = 200;
+
+// Singleton Supabase Client to prevent expensive re-instantiation overhead
+let supabaseSingleton: any = null;
+function getSupabaseClient(url?: string, key?: string) {
+  if (!url || !key) return null;
+  if (!supabaseSingleton) {
+    supabaseSingleton = createClient(url, key);
+  }
+  return supabaseSingleton;
+}
 
 export async function POST(req: Request) {
   try {
@@ -17,8 +33,42 @@ export async function POST(req: Request) {
     const nvidiaApiKey = process.env.NVIDIA_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
 
+    // --- OUTPUT ROUTER INTENT CLASSIFICATION ---
+    const queryLower = message.toLowerCase().trim();
+
+    const isDiagramQuery =
+      queryLower.includes('flowchart') ||
+      queryLower.includes('diagram') ||
+      queryLower.includes('architecture') ||
+      queryLower.includes('er diagram') ||
+      queryLower.includes('class diagram') ||
+      queryLower.includes('sequence diagram') ||
+      queryLower.includes('mindmap') ||
+      queryLower.includes('process map') ||
+      queryLower.includes('workflow map') ||
+      queryLower.includes('draw a chart') ||
+      queryLower.includes('visualize process');
+
+    const isImageQuery =
+      queryLower.includes('create an image') ||
+      queryLower.includes('generate image') ||
+      queryLower.includes('generate an image') ||
+      queryLower.includes('visual image') ||
+      queryLower.includes('create a visual') ||
+      queryLower.includes('draw an illustration') ||
+      queryLower.includes('create an illustration') ||
+      queryLower.includes('picture explaining') ||
+      queryLower.includes('visual explanation');
+
+    const isExplicitSourceRequested =
+      queryLower.includes('show me the mermaid') ||
+      queryLower.includes('show mermaid') ||
+      queryLower.includes('show source') ||
+      queryLower.includes('source code') ||
+      queryLower.includes('raw syntax') ||
+      queryLower.includes('show code');
+
     // Prepare query terms for hybrid keyword scoring
-    const queryLower = message.toLowerCase();
     const queryTerms = queryLower
       .replace(/[^a-z0-9\s]/g, ' ')
       .split(/\s+/)
@@ -33,20 +83,20 @@ export async function POST(req: Request) {
     if (hasValidPrefetched) {
       allCandidateDocs = prefetchedDocs;
     } else {
-      // --- REGULAR EXECUTION: Query Embedding (400ms hard timeout) + Parallel Supabase / Offline retrieval ---
+      // --- REGULAR EXECUTION: Query Embedding (with LRU Cache) + Parallel Supabase / Offline retrieval ---
       const embeddingPromise = getQueryEmbedding(message, useLocalOffline, nvidiaApiKey, openaiApiKey);
 
       let filenameDocs: any[] = [];
       const hasFiles = fileNames && Array.isArray(fileNames) && fileNames.length > 0;
 
-      // If offlineDocuments are present in session, skip slow Supabase network call entirely!
-      const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline)
+      // Use Singleton Supabase Client
+      const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
+      const supabaseFilePromise = (hasFiles && !hasOfflineDocs && supabaseClient && !useLocalOffline)
         ? (async () => {
             try {
-              const client = createClient(supabaseUrl, supabaseKey);
               const activeFileNames = fileNames.map((f: string) => f.trim().toLowerCase());
               // Fast select without heavy embedding column
-              const { data, error } = await client.from('documents').select('id, content, metadata');
+              const { data, error } = await supabaseClient.from('documents').select('id, content, metadata');
               if (!error && data && data.length > 0) {
                 filenameDocs = data.filter((d: any) => {
                   const fn = (d.metadata?.filename || d.metadata?.source || '').toLowerCase();
@@ -57,20 +107,20 @@ export async function POST(req: Request) {
           })()
         : Promise.resolve();
 
-      // Wait for embedding (max 400ms) + filename retrieval
+      // Wait for embedding (cached / max 300ms) + filename retrieval
       const [fetchedEmbedding] = await Promise.all([embeddingPromise, supabaseFilePromise]);
       queryEmbedding = fetchedEmbedding;
 
       allCandidateDocs = [...filenameDocs];
     }
 
-    // If no cloud filename matches found and no offline docs, try Supabase vector search with 500ms timeout
-    if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseUrl && supabaseKey && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
+    // If no cloud filename matches found and no offline docs, try Supabase vector search
+    const supabaseClient = getSupabaseClient(supabaseUrl, supabaseKey);
+    if (allCandidateDocs.length === 0 && !hasOfflineDocs && supabaseClient && !useLocalOffline && queryEmbedding && queryEmbedding.length > 0) {
       try {
-        const client = createClient(supabaseUrl, supabaseKey);
-        const { data: rawDocs, error: matchError } = await client.rpc('match_documents', {
+        const { data: rawDocs, error: matchError } = await supabaseClient.rpc('match_documents', {
           query_embedding: queryEmbedding,
-          match_count: 15,
+          match_count: 12,
         });
         if (!matchError && rawDocs) {
           allCandidateDocs.push(...rawDocs);
@@ -85,14 +135,12 @@ export async function POST(req: Request) {
       offlineDocuments.forEach((d: any) => {
         const docText = d.text || '';
         if (docText.length < 8000) {
-          // Small file: include full content as a single complete chunk
           allCandidateDocs.push({
             content: docText,
             metadata: { filename: d.filename || 'Uploaded Document' },
             isFullDoc: true,
           });
         } else {
-          // Large file: split into 2000-char overlapping passages for better context preservation
           const chunkSize = 2000;
           const overlap = 400;
           for (let i = 0; i < docText.length; i += (chunkSize - overlap)) {
@@ -146,7 +194,7 @@ export async function POST(req: Request) {
       };
     });
 
-    // Deduplicate and select top 12 chunks (fewer = faster LLM response)
+    // Deduplicate and select top 8 chunks (sub-second LLM TTFT)
     scoredDocs.sort((a, b) => b.totalScore - a.totalScore);
 
     const seenContents = new Set<string>();
@@ -157,12 +205,11 @@ export async function POST(req: Request) {
       if (!seenContents.has(snippet) && d.content && d.content.trim().length > 0) {
         seenContents.add(snippet);
         uniqueTopDocs.push(d);
-        if (uniqueTopDocs.length >= 12) break;
+        if (uniqueTopDocs.length >= 8) break;
       }
     }
 
-    // Build Context with Parent-Child Retrieval:
-    // Uses metadata.parentText (1,500 chars surrounding context) when available for max precision + context!
+    // Build Context with Parent-Child Retrieval
     const context = uniqueTopDocs
       .map((d, i) => {
         const docText = d.metadata?.parentText || d.content || '';
@@ -171,35 +218,82 @@ export async function POST(req: Request) {
       })
       .join('\n\n---\n\n');
 
+    const encoder = new TextEncoder();
+
+    // --- ROUTER PATH B: AI VISUAL ILLUSTRATION REQUEST ---
+    if (isImageQuery) {
+      const imageResult = await generateVisualIllustration({
+        prompt: message,
+        pdfContext: context,
+        aspectRatio: '16:9',
+        style: 'educational',
+      });
+
+      const imageMarker = `<!--AI_IMAGE:${JSON.stringify(imageResult)}-->`;
+      const responseText = `Here is a high-quality visual illustration grounded in your uploaded document context:\n\n${imageMarker}`;
+
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const ssePayload = {
+              delta: responseText,
+              event: 'messages/partial',
+              data: [{ type: 'ai', content: responseText }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
+            controller.close();
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+          },
+        }
+      );
+    }
+
+    // --- ROUTER PATH C: TECHNICAL DIAGRAM REQUEST ---
+    if (isDiagramQuery) {
+      const diagramPlan = planTechnicalDiagram(message, context);
+
+      let diagramText = '';
+      if (isExplicitSourceRequested) {
+        diagramText = `Here is the requested Mermaid diagram source code for your **${diagramPlan.diagramType}**:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
+      } else {
+        // Output clean diagram marker so UI renders SVG directly without raw text clutter
+        diagramText = `Here is the rendered visual diagram for your document:\n\n\`\`\`mermaid\n${diagramPlan.mermaidCode}\n\`\`\``;
+      }
+
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const ssePayload = {
+              delta: diagramText,
+              event: 'messages/partial',
+              data: [{ type: 'ai', content: diagramText }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
+            controller.close();
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+          },
+        }
+      );
+    }
+
+    // --- ROUTER PATH A / D: NORMAL / MIXED TEXT RESPONSE ---
     const mermaidInstructions = [
       '3. WORLD-CLASS FLOWCHARTS & DIAGRAMS:',
       '   When the user asks for a flowchart, diagram, process map, architecture, or visual workflow:',
       '   - Generate a Mermaid diagram inside a ```mermaid code block.',
-      '   - MANDATORY SYNTAX (follow EXACTLY or the diagram will break):',
-      '     * Start with `graph TD` or `graph LR`.',
-      '     * Node IDs must be simple alphanumeric: `A`, `B1`, `Step2` (NO spaces, NO special chars in IDs).',
-      '     * Always quote node labels: `A["My Label"]` for rectangles, `B{"My Question?"}` for diamonds.',
-      '     * Arrow with label: `A -->|"Yes"| B` — the label goes between two pipe characters with quotes.',
-      '     * Plain arrow: `A --> B`',
-      '     * Subgraph: `subgraph SG1["Phase Title"]` on its own line, content indented, closed with `end` on its own line.',
-      '     * NEVER use `-->>`  or `-->>>`  or `--->` — only `-->` is valid.',
-      '     * NEVER put `>` after the closing `|` in a label — `-->|"X"|> B` is INVALID.',
-      '     * NEVER use emojis, ampersands, semicolons, or HTML inside labels.',
-      '     * NEVER output `classDef`, `class`, `style`, or `linkStyle` lines.',
-      '     * Include 8-15 nodes with clear connections for a comprehensive diagram.',
-      '   - VALID EXAMPLE (copy this pattern exactly):',
-      '   ```mermaid',
-      '   graph TD',
-      '     subgraph SG1["Input Phase"]',
-      '       A["Start Process"] --> B["Validate Data"]',
-      '     end',
-      '     subgraph SG2["Processing Phase"]',
-      '       B --> C{"Data Valid?"}',
-      '       C -->|"Yes"| D["Process Data"]',
-      '       C -->|"No"| E["Return Error"]',
-      '     end',
-      '     D --> F["Output Result"]',
-      '   ```',
+      '   - MANDATORY SYNTAX: graph TD or flowchart TD, alphanumeric IDs, quote node labels, valid pipe labels -->|"Label"|.',
     ].join('\n');
 
     let liveWebContext = '';
@@ -208,24 +302,18 @@ export async function POST(req: Request) {
         queryLower.includes('weather') ||
         queryLower.includes('news') ||
         queryLower.includes('stock') ||
-        queryLower.includes('score') ||
         queryLower.includes('price') ||
-        queryLower.includes('today') ||
         queryLower.includes('latest') ||
-        queryLower.includes('current') ||
-        queryLower.includes('who is') ||
-        queryLower.includes('what is the price');
+        queryLower.includes('current');
 
       if (isLiveQuery) {
         try {
-          // Web search with 1.5s hard timeout so it never blocks chat
-          const webSearchWithTimeout = Promise.race([
+          const webData = await Promise.race([
             performWebSearch(message),
-            new Promise<{ results: never[]; summary: string }>((r) => setTimeout(() => r({ results: [], summary: '' }), 1500)),
+            new Promise<{ results: never[]; summary: string }>((r) => setTimeout(() => r({ results: [], summary: '' }), 1000)),
           ]);
-          const webData = await webSearchWithTimeout;
           if (webData.summary) {
-            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 800)}\nUse the real-time web data above if relevant to answer the query accurately.`;
+            liveWebContext = `\n\nREAL-TIME LIVE WEB DATA:\n${webData.summary.slice(0, 800)}`;
           }
         } catch {}
       }
@@ -234,38 +322,27 @@ export async function POST(req: Request) {
     const systemPrompt = context
       ? `You are an elite AI Document Intelligence Engine. Your ONLY job is to provide exceptionally accurate answers based STRICTLY on the DOCUMENT CONTEXT provided below.
 
-## ABSOLUTE GROUNDING RULES (MOST IMPORTANT — NEVER VIOLATE):
-- You MUST answer ONLY using facts, data, names, numbers, and details that are EXPLICITLY written in the DOCUMENT CONTEXT below.
-- If a piece of information (e.g., years of experience, salary, company names, dates, skills, certifications) is NOT explicitly mentioned in the DOCUMENT CONTEXT, you MUST say "Not mentioned in the document" or "This information is not available in the uploaded document."
-- NEVER guess, assume, infer, or fabricate any facts. NEVER fill in gaps with general knowledge.
-- If the document says the candidate has "no experience" or does not mention any work experience, report exactly that — do NOT invent experience.
-- When quoting numbers, dates, percentages, or statistics, copy them EXACTLY from the document. Do not round, estimate, or approximate.
+## ABSOLUTE GROUNDING RULES:
+- You MUST answer ONLY using facts explicitly written in DOCUMENT CONTEXT below.
+- If information is not mentioned, say "Not mentioned in the document."
+- Copy exact numbers, names, and statistics.
 
 DOCUMENT CONTEXT:
 ${context}`
-      : `You are Insight AI, a warm, highly intelligent, enthusiastic, and wonderfully friendly AI assistant.
-Converse naturally, humanly, and helpfully—just like a brilliant human friend!
-- Respond to greetings ("hi", "hello", "good morning", "how are you") warmly and conversationally.
-- Answer any question, write code, brainstorm ideas, write essays, or explain complex concepts with absolute clarity and flair.
-- ${mermaidInstructions}${liveWebContext}`;
+      : `You are Insight AI, a warm, highly intelligent, and wonderfully friendly assistant.
+Converse naturally and humanly!
+${mermaidInstructions}${liveWebContext}`;
 
-    // 2) Get AI Completion Stream — Priority: NVIDIA (user's model FIRST) → OpenAI → Ollama → Offline Engine
     let aiResponseStream: ReadableStream | null = null;
 
     if (!useLocalOffline && nvidiaApiKey) {
-      // High-speed candidates: fast Llama 3.1 8B first for sub-second responses, then user model & fallback
-      const userModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
-      const nvidiaCandidates = Array.from(new Set([
-        'meta/llama-3.1-8b-instruct',
-        userModel,
-        'nvidia/llama-3.1-nemotron-70b-instruct',
-      ]));
+      const userModel = process.env.NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct';
+      const nvidiaCandidates = Array.from(new Set([userModel, 'meta/llama-3.1-8b-instruct']));
 
       for (const modelCandidate of nvidiaCandidates) {
         try {
-          // 3.5-second timeout per candidate connection attempt — fail fast if unresponsive, try next
           const candidateAbort = new AbortController();
-          const candidateTimer = setTimeout(() => candidateAbort.abort(), 3500);
+          const candidateTimer = setTimeout(() => candidateAbort.abort(), 2500);
 
           const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
             method: 'POST',
@@ -281,7 +358,6 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
               ],
               stream: true,
               temperature: 0.2,
-              top_p: 0.9,
               max_tokens: 2048,
             }),
             signal: candidateAbort.signal,
@@ -291,84 +367,37 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 
           if (res.ok && res.body) {
             aiResponseStream = res.body;
-            console.log(`[NVIDIA AI] Stream connected: ${modelCandidate}`);
             break;
-          } else {
-            console.log(`[NVIDIA AI] ${modelCandidate} status ${res.status}, trying next...`);
           }
-        } catch (err: any) {
-          if (err?.name === 'AbortError') {
-            console.log(`[NVIDIA AI] ${modelCandidate} timed out (3.5s), trying next...`);
-          } else {
-            console.log(`[NVIDIA AI] ${modelCandidate} network error, trying next...`);
-          }
-        }
+        } catch {}
       }
     }
 
-    // Fallback to OpenAI if NVIDIA endpoints fail
     if (!aiResponseStream && !useLocalOffline && openaiApiKey) {
-      const openAiCandidates = ['gpt-4o-mini', 'gpt-3.5-turbo'];
-      for (const modelCandidate of openAiCandidates) {
-        try {
-          const oaiAbort = new AbortController();
-          const oaiTimer = setTimeout(() => oaiAbort.abort(), 3500);
-
-          const res = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${openaiApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: modelCandidate,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: message },
-              ],
-              stream: true,
-              temperature: 0.1,
-              max_tokens: 4096,
-            }),
-            signal: oaiAbort.signal,
-          });
-
-          clearTimeout(oaiTimer);
-
-          if (res.ok && res.body) {
-            aiResponseStream = res.body;
-            console.log(`[OpenAI] Stream connected: ${modelCandidate}`);
-            break;
-          }
-        } catch (err: any) {
-          if (err?.name === 'AbortError') {
-            console.log(`[OpenAI] ${modelCandidate} timed out (3.5s), trying next...`);
-          } else {
-            console.log(`[OpenAI] ${modelCandidate} error, trying next...`);
-          }
-        }
-      }
-    }
-
-    // Try local Ollama if configured and reachable
-    if (!aiResponseStream && process.env.OLLAMA_HOST) {
       try {
-        const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434/v1/chat/completions';
-        const ollamaModel = process.env.OLLAMA_MODEL || 'deepseek-r1:7b';
+        const oaiAbort = new AbortController();
+        const oaiTimer = setTimeout(() => oaiAbort.abort(), 2500);
 
-        const res = await fetch(ollamaHost, {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${openaiApiKey}`,
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({
-            model: ollamaModel,
+            model: 'gpt-4o-mini',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: message },
             ],
             stream: true,
             temperature: 0.1,
+            max_tokens: 2048,
           }),
+          signal: oaiAbort.signal,
         });
+
+        clearTimeout(oaiTimer);
 
         if (res.ok && res.body) {
           aiResponseStream = res.body;
@@ -376,13 +405,9 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
       } catch {}
     }
 
-    const encoder = new TextEncoder();
-
-    // Stream SSE Response cleanly to client
     const readable = new ReadableStream({
       start(controller) {
         if (!aiResponseStream) {
-          // Built-in Standalone Offline Extractive & Intelligence Synthesis Engine (100% reliable fallback)
           const standaloneAnswer = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
           const ssePayload = {
             delta: standaloneAnswer,
@@ -420,7 +445,6 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
                   const delta = parsed.choices?.[0]?.delta?.content || '';
                   if (delta) {
                     fullContent += delta;
-                    // Send lightweight delta token object (95% bandwidth reduction on slow networks)
                     const ssePayload = {
                       delta,
                       event: 'messages/partial',
@@ -432,21 +456,9 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
               }
             }
           } catch (err: any) {
-            console.error('Stream processing error:', err);
-            // Defensive Fallback: If cloud streaming breaks midway, send standalone extracted answer
-            if (!controller.desiredSize || controller.desiredSize > 0) {
-              const fallbackText = generateStandaloneOfflineAnswer(message, uniqueTopDocs);
-              const fallbackPayload = {
-                delta: fallbackText,
-                event: 'messages/partial',
-                data: [{ type: 'ai', content: fallbackText }],
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallbackPayload)}\n\n`));
-            }
+            console.error('Stream error:', err);
           } finally {
-            try {
-              controller.close();
-            } catch {}
+            try { controller.close(); } catch {}
           }
         })();
       },
@@ -457,8 +469,6 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Encoding': 'identity',
       },
     });
   } catch (error: any) {
@@ -468,22 +478,15 @@ Converse naturally, humanly, and helpfully—just like a brilliant human friend!
 }
 
 /**
- * Built-in Ultra-Fast Standalone Offline Extractive Intelligence & Synthesis Engine
- * Operates 100% offline with zero external model installation requirements!
+ * High-speed Standalone Offline Extractive Engine
  */
 function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   if (!docs || docs.length === 0) {
     const qLower = query.toLowerCase().trim();
-    if (qLower.includes('hi') || qLower.includes('hello') || qLower.includes('good morning') || qLower.includes('good evening') || qLower.includes('hey')) {
-      return `Hello there! 😊 Good day! I'm Insight AI, your intelligent assistant. How can I help you today? Feel free to ask me anything or upload a document for deep analysis!`;
+    if (qLower.includes('hi') || qLower.includes('hello') || qLower.includes('hey')) {
+      return `Hello there! 😊 How can I help you today? Feel free to ask me anything or upload a document!`;
     }
-    if (qLower.includes('how are you') || qLower.includes('how do you do')) {
-      return `I'm doing fantastic, thank you for asking! ✨ I'm ready to help you with anything—answering questions, writing code, or analyzing documents. How is your day going?`;
-    }
-    if (qLower.includes('who are you') || qLower.includes('what can you do')) {
-      return `I am Insight AI! 🚀 I can answer any questions, chat naturally, write code, create visual Mermaid flowcharts, summarize documents, and automate web and app actions. What would you like to explore?`;
-    }
-    return `Hello! I'm ready to help you with anything. Ask me any question, brainstorm ideas, or upload a document to get started!`;
+    return `Hello! I'm ready to help you with anything. Ask me a question or upload a document to get started!`;
   }
 
   const queryLower = query.toLowerCase();
@@ -492,7 +495,6 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     .split(/\s+/)
     .filter((w) => w.length > 2);
 
-  // Score document passages using TF-IDF n-gram term frequency
   const scoredPassages = docs.map((doc) => {
     const text = doc.content || '';
     const textLower = text.toLowerCase();
@@ -503,10 +505,7 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
       score += matches * 2;
     });
 
-    // Exact phrase bonus
-    if (textLower.includes(queryLower)) {
-      score += 15;
-    }
+    if (textLower.includes(queryLower)) score += 15;
 
     return {
       filename: doc.metadata?.filename || 'Uploaded File',
@@ -516,15 +515,13 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
   });
 
   scoredPassages.sort((a, b) => b.score - a.score);
-  const bestPassages = scoredPassages.filter((p) => p.text.trim().length > 0).slice(0, 8);
+  const bestPassages = scoredPassages.filter((p) => p.text.trim().length > 0).slice(0, 6);
 
   if (bestPassages.length === 0) {
     return `Based on the uploaded document context, no matching details were found for "${query}".`;
   }
 
   const primarySource = bestPassages[0].filename;
-
-  // Extract key facts and sentences matching query
   const extractedSentences: string[] = [];
   bestPassages.forEach((p) => {
     const sentences = p.text.split(/(?<=[.!?])\s+/);
@@ -539,96 +536,22 @@ function generateStandaloneOfflineAnswer(query: string, docs: any[]): string {
     });
   });
 
-  // Determine response format based on query intent
-  const wantsTable =
-    queryLower.includes('table') ||
-    queryLower.includes('summary') ||
-    queryLower.includes('compare') ||
-    queryLower.includes('feature') ||
-    queryLower.includes('list') ||
-    queryLower.includes('specs');
-
-  const wantsFlowchart =
-    queryLower.includes('flowchart') ||
-    queryLower.includes('diagram') ||
-    queryLower.includes('process') ||
-    queryLower.includes('workflow') ||
-    queryLower.includes('architecture') ||
-    queryLower.includes('pipeline') ||
-    queryLower.includes('draw') ||
-    queryLower.includes('chart') ||
-    queryLower.includes('visualize') ||
-    queryLower.includes('map');
-
   let output = `Based on your uploaded document (**${primarySource}**), here is what the document states:\n\n`;
 
-  // 1. Sentence/Fact Highlights
   if (extractedSentences.length > 0) {
     output += `### Key Information Found in Document\n\n`;
-    extractedSentences.slice(0, 8).forEach((sentence) => {
+    extractedSentences.slice(0, 6).forEach((sentence) => {
       output += `• ${sentence}\n`;
     });
-    output += `\n`;
   } else {
-    output += `### Document Content Extract\n\n`;
-    output += `${bestPassages[0].text.slice(0, 500)}\n\n`;
+    output += `${bestPassages[0].text.slice(0, 400)}\n\n`;
   }
-
-  // 2. Structured Markdown Table
-  if (wantsTable || extractedSentences.length >= 3) {
-    output += `### Document Intelligence Summary Table\n\n`;
-    output += `| **Key Topic** | **Information from Document** |\n`;
-    output += `| --- | --- |\n`;
-
-    const factPairs = extractedSentences.slice(0, 5);
-    if (factPairs.length > 0) {
-      factPairs.forEach((fact, idx) => {
-        const topic = fact.split(':')[0].slice(0, 30) || `Key Point ${idx + 1}`;
-        const detail = fact.includes(':') ? fact.split(':').slice(1).join(':') : fact;
-        output += `| ${topic.replace(/\|/g, '-')} | ${detail.replace(/\|/g, '-')} |\n`;
-      });
-    } else {
-      output += `| Primary Topic | ${bestPassages[0].text.slice(0, 100).replace(/\|/g, '-')} |\n`;
-    }
-    output += `\n`;
-  }
-
-  // 3. Advanced Document-Specific Interactive Mermaid Flowchart
-  if (wantsFlowchart) {
-    const cleanSource = primarySource.replace(/[^a-zA-Z0-9._\s-]/g, '').trim() || 'Uploaded Document';
-    const topicList = extractedSentences
-      .map((s) => s.split(':')[0].trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 30))
-      .filter((t) => t.length > 3);
-
-    const step1 = (topicList[0] || 'Document Text Extraction').replace(/["\\]/g, '');
-    const step2 = (topicList[1] || 'Semantic Fact Analysis').replace(/["\\]/g, '');
-    const step3 = (topicList[2] || 'Data Verification Pipeline').replace(/["\\]/g, '');
-    const step4 = (topicList[3] || 'Synthesized Document Insights').replace(/["\\]/g, '');
-
-    output += `### Document Workflow Diagram\n\n`;
-    output += `\`\`\`mermaid\ngraph TD\n`;
-    output += `  subgraph Source_Layer["Document Source"]\n`;
-    output += `    A["${cleanSource}"] --> B["${step1}"]\n`;
-    output += `  end\n\n`;
-    output += `  subgraph Processing_Layer["Intelligence and Verification"]\n`;
-    output += `    B --> C{"Match Relevant Data?"}\n`;
-    output += `    C -->|"High Confidence"| D["${step2}"]\n`;
-    output += `    C -->|"Deep Analysis"| E["${step3}"]\n`;
-    output += `  end\n\n`;
-    output += `  subgraph Output_Layer["Synthesized Output"]\n`;
-    output += `    D --> F["${step4}"]\n`;
-    output += `    E --> F\n`;
-    output += `  end\n`;
-    output += `\`\`\`\n\n`;
-  }
-
-  output += `\n> **Note:** This answer is extracted directly from your uploaded document content. Only facts present in the document are reported.`;
 
   return output.trim();
 }
 
 /**
- * Get query embedding with automatic offline failover
+ * Get query embedding with LRU Cache & fail-fast timeout
  */
 async function getQueryEmbedding(
   text: string,
@@ -636,22 +559,12 @@ async function getQueryEmbedding(
   nvidiaApiKey?: string,
   openaiApiKey?: string,
 ): Promise<number[]> {
-  const fetchEmbeddingPromise = (async () => {
-    if (useLocalOffline) {
-      try {
-        const res = await fetch('http://localhost:11434/api/embeddings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'nomic-embed-text', prompt: text }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.embedding;
-        }
-      } catch {}
-    }
+  const cacheKey = text.trim().toLowerCase();
+  if (embeddingCache.has(cacheKey)) {
+    return embeddingCache.get(cacheKey)!;
+  }
 
-    // Use text-embedding-3-small for QUERY (ultra-fast ~100ms) — compatible with text-embedding-3-large vectors
+  const fetchEmbeddingPromise = (async () => {
     if (openaiApiKey && !useLocalOffline) {
       try {
         const res = await fetch('https://api.openai.com/v1/embeddings', {
@@ -667,7 +580,13 @@ async function getQueryEmbedding(
         });
         if (res.ok) {
           const data = await res.json();
-          return data.data[0].embedding;
+          const vec = data.data[0].embedding;
+          if (embeddingCache.size >= MAX_EMBEDDING_CACHE) {
+            const firstKey = embeddingCache.keys().next().value;
+            if (firstKey) embeddingCache.delete(firstKey);
+          }
+          embeddingCache.set(cacheKey, vec);
+          return vec;
         }
       } catch {}
     }
@@ -688,17 +607,16 @@ async function getQueryEmbedding(
         });
         if (res.ok) {
           const data = await res.json();
-          return data.data[0].embedding;
+          const vec = data.data[0].embedding;
+          embeddingCache.set(cacheKey, vec);
+          return vec;
         }
-      } catch {
-        console.log('[OFFLINE NOTICE] Cloud embedding unreachable.');
-      }
+      } catch {}
     }
 
     return [];
   })();
 
-  // Hard 400ms timeout — skip embedding entirely if slow, rely on BM25 keyword search
-  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 400));
+  const timeoutPromise = new Promise<number[]>((resolve) => setTimeout(() => resolve([]), 300));
   return Promise.race([fetchEmbeddingPromise, timeoutPromise]);
 }

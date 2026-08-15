@@ -14,6 +14,8 @@ import type { ScientificReportData } from '@/components/scientific-report';
 import { TransactionPreviewCard } from '@/components/transaction-preview-card';
 import type { TransactionRecord } from '@/lib/brain/transaction-agent/types';
 import { ChatAttachment } from '@/lib/history-store';
+import { AIImageCard } from '@/components/ai-image-card';
+import type { ImageGenResult } from '@/lib/image-generation-service';
 import {
   Accordion,
   AccordionContent,
@@ -37,14 +39,11 @@ export interface ChatMessageProps {
 /**
  * Pre-process message content to wrap bare Mermaid diagram blocks in
  * proper ```mermaid code fences so ReactMarkdown can detect them.
- * Also wraps content that's ALREADY in generic code fences (```\n graph TD...)
- * but missing the mermaid language tag.
  */
 function preprocessMermaidContent(content: string): string {
   if (!content) return '';
   let processed = content;
 
-  // Mermaid diagram header keywords
   const mermaidHeaders = [
     'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
     'erDiagram', 'journey', 'gantt', 'pie', 'gitgraph', 'mindmap', 'timeline',
@@ -53,7 +52,7 @@ function preprocessMermaidContent(content: string): string {
     'C4Dynamic', 'C4Deployment',
   ];
 
-  // 1. Fix generic code fences (``` without mermaid tag) that contain mermaid content
+  // 1. Fix generic code fences (``` without mermaid tag) containing diagram definitions
   processed = processed.replace(/```\s*\n([\s\S]*?)```/g, (match, codeBlock: string) => {
     const trimmedBlock = codeBlock.trim();
     const isMermaid = mermaidHeaders.some((h) => trimmedBlock.toLowerCase().startsWith(h.toLowerCase())) ||
@@ -64,7 +63,7 @@ function preprocessMermaidContent(content: string): string {
     return match;
   });
 
-  // 2. Wrap unfenced mermaid blocks (e.g. lines starting with graph TD / flowchart LR)
+  // 2. Wrap unfenced mermaid blocks
   for (const header of mermaidHeaders) {
     const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const bareBlockRegex = new RegExp(
@@ -94,10 +93,17 @@ export function ChatMessage({
   const isUser = message.role === 'user';
   const isLoading = message.role === 'assistant' && message.content === '';
 
-  // Extract chart data, scientific reports, code reasoning, and transaction previews from markers
-  const { displayContent, chartData, scientificReport, codeReasoning, transactionData } = useMemo(() => {
+  // Extract markers: AI images, chart data, scientific reports, code reasoning, transactions
+  const { displayContent, chartData, scientificReport, codeReasoning, transactionData, aiImageData } = useMemo(() => {
     if (message.role !== 'assistant' || !message.content) {
-      return { displayContent: message.content, chartData: null, scientificReport: null, codeReasoning: null, transactionData: message.transaction || null };
+      return {
+        displayContent: message.content,
+        chartData: null,
+        scientificReport: null,
+        codeReasoning: null,
+        transactionData: message.transaction || null,
+        aiImageData: null,
+      };
     }
 
     let content = message.content;
@@ -105,13 +111,23 @@ export function ChatMessage({
     let sciReport: ScientificReportData | null = null;
     let reasoningObj: { code: string; executionTimeMs?: number } | null = null;
     let txRecord: TransactionRecord | null = message.transaction || null;
+    let imgResult: ImageGenResult | null = null;
+
+    // Extract AI Image marker
+    const imgMatch = content.match(/<!--AI_IMAGE:([\s\S]*?)-->/);
+    if (imgMatch) {
+      try {
+        imgResult = JSON.parse(imgMatch[1]);
+      } catch {}
+      content = content.replace(/<!--AI_IMAGE:[\s\S]*?-->/, '').trim();
+    }
 
     // Extract transaction preview marker
     const txMatch = content.match(/<!--TRANSACTION_PREVIEW:([\s\S]*?)-->/);
     if (txMatch) {
       try {
         txRecord = JSON.parse(txMatch[1]);
-      } catch { /* ignore malformed transaction marker */ }
+      } catch {}
       content = content.replace(/<!--TRANSACTION_PREVIEW:[\s\S]*?-->/, '').trim();
     }
 
@@ -120,7 +136,7 @@ export function ChatMessage({
     if (sciMatch) {
       try {
         sciReport = JSON.parse(sciMatch[1]);
-      } catch { /* ignore malformed scientific report data */ }
+      } catch {}
       content = content.replace(/<!--SCIENTIFIC_REPORT:[\s\S]*?-->/, '').trim();
     }
 
@@ -129,7 +145,7 @@ export function ChatMessage({
     if (chartMatch) {
       try {
         chart = JSON.parse(chartMatch[1]);
-      } catch { /* ignore malformed chart data */ }
+      } catch {}
       content = content.replace(/<!--CHART_DATA:[\s\S]*?-->/, '').trim();
     }
 
@@ -138,17 +154,23 @@ export function ChatMessage({
     if (reasoningMatch) {
       try {
         reasoningObj = JSON.parse(reasoningMatch[1]);
-      } catch { /* ignore */ }
+      } catch {}
       content = content.replace(/<!--CODE_REASONING:[\s\S]*?-->/, '').trim();
     }
 
-    // Strip leftover raw HTML details/summary strings from legacy responses
     content = content
       .replace(/<\/?details>/gi, '')
       .replace(/<summary>.*?<\/summary>/gi, '')
       .trim();
 
-    return { displayContent: content, chartData: chart, scientificReport: sciReport, codeReasoning: reasoningObj, transactionData: txRecord };
+    return {
+      displayContent: content,
+      chartData: chart,
+      scientificReport: sciReport,
+      codeReasoning: reasoningObj,
+      transactionData: txRecord,
+      aiImageData: imgResult,
+    };
   }, [message.content, message.role, message.transaction]);
 
   const handleCopy = async () => {
@@ -256,6 +278,7 @@ export function ChatMessage({
                 })}
               </div>
             )}
+
             {isUser ? (
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
             ) : (
@@ -281,21 +304,16 @@ export function ChatMessage({
                       <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors" {...props} />
                     ),
                     pre: ({ node, children, ...props }: any) => {
-                      // Check if the pre contains a mermaid code block
                       const child = Array.isArray(children) ? children[0] : children;
                       if (child?.props?.className?.includes('language-mermaid')) {
                         const codeText = String(child.props.children).replace(/\n$/, '');
                         return <MermaidDiagram key={codeText.slice(0, 40)} chart={codeText} />;
                       }
-                      // Check if the code content looks like a mermaid diagram
                       const codeText = String(child?.props?.children || '').replace(/\n$/, '').trim();
                       const mermaidPrefixes = [
                         'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
                         'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
                         'journey', 'mindmap', 'timeline',
-                        'requirementDiagram', 'quadrantChart',
-                        'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
-                        'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
                       ];
                       if (
                         mermaidPrefixes.some((p) => codeText.startsWith(p)) ||
@@ -310,15 +328,11 @@ export function ChatMessage({
                       const codeString = String(children).replace(/\n$/, '');
                       const trimmed = codeString.trim();
 
-                      // Detect mermaid: explicit language tag OR content pattern
                       const isMermaidLang = match?.[1] === 'mermaid';
                       const isMermaidContent = [
                         'graph ', 'flowchart ', 'sequenceDiagram', 'classDiagram',
                         'stateDiagram', 'erDiagram', 'gantt', 'pie', 'gitgraph',
                         'journey', 'mindmap', 'timeline',
-                        'requirementDiagram', 'quadrantChart',
-                        'architecture-beta', 'block-beta', 'xychart-beta', 'sankey-beta',
-                        'C4Context', 'C4Container', 'C4Component', 'C4Dynamic', 'C4Deployment',
                       ].some((p) => trimmed.startsWith(p)) ||
                         (trimmed.includes('subgraph') && (trimmed.includes('-->') || trimmed.includes('---')));
 
@@ -347,7 +361,17 @@ export function ChatMessage({
                   {preprocessMermaidContent(displayContent)}
                 </ReactMarkdown>
 
-                {/* Render Chart.js visualization(s) if chart data is present */}
+                {/* Render AI Image Card if AI Image payload is present */}
+                {aiImageData && aiImageData.imageUrl && (
+                  <AIImageCard
+                    imageUrl={aiImageData.imageUrl}
+                    prompt={aiImageData.promptUsed}
+                    provider={aiImageData.provider}
+                    groundedFacts={aiImageData.groundedFacts}
+                  />
+                )}
+
+                {/* Render Chart.js visualization(s) */}
                 {(() => {
                   if (!chartData) return null;
                   const chartList = Array.isArray(chartData) ? chartData : [chartData];
@@ -380,7 +404,7 @@ export function ChatMessage({
                   );
                 })()}
 
-                {/* Trust Layer: Main Reasoning Code Panel */}
+                {/* Code Reasoning Panel */}
                 {codeReasoning && codeReasoning.code && (
                   <details className="group my-3 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 text-xs shadow-sm">
                     <summary className="cursor-pointer font-semibold text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-between text-xs">
@@ -398,12 +422,12 @@ export function ChatMessage({
                   </details>
                 )}
 
-                {/* Render Scientific Report if scientific analysis data is present */}
+                {/* Scientific Report */}
                 {scientificReport && (
                   <ScientificReport data={scientificReport} />
                 )}
 
-                {/* Render Transaction Preview Card if active transaction data is present */}
+                {/* Transaction Preview Card */}
                 {transactionData && (
                   <TransactionPreviewCard
                     transaction={transactionData}
