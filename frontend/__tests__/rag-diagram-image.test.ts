@@ -1,7 +1,14 @@
 import { detectDiagramType, validateAndRepairMermaid, planTechnicalDiagram } from '../lib/diagram-planner';
 import { generateVisualIllustration } from '../lib/image-generation-service';
 
-describe('PDF RAG Diagram & AI Image Generation Pipeline', () => {
+describe('PDF RAG Diagram & Gemini AI Image Generation Pipeline', () => {
+  beforeAll(() => {
+    // Rely on process.env or fallback configuration
+    if (!process.env.GEMINI_IMAGE_MODEL) {
+      process.env.GEMINI_IMAGE_MODEL = 'imagen-3.0-generate-002';
+    }
+  });
+
   describe('1. Technical Diagram Planning & Auto-Repair', () => {
     test('should correctly detect sequence diagram intent', () => {
       expect(detectDiagramType('Create a sequence diagram of user login')).toBe('sequence');
@@ -46,11 +53,11 @@ The application uses a Next.js frontend, a LangChain RAG pipeline, and a Supabas
     });
   });
 
-  describe('2. AI Image Generation Service Abstraction', () => {
-    test('should successfully generate grounded visual illustration using Pollinations AI fallback', async () => {
+  describe('2. Gemini AI Image Generation Service Integration', () => {
+    test('should generate grounded visual illustration using Google Gemini service configuration', async () => {
       const samplePdfContext = 'The document explains neural network transformer self-attention mechanisms.';
       const result = await generateVisualIllustration({
-        prompt: 'Create a professional visual image explaining transformer self-attention',
+        prompt: 'Create a beautiful professional visual explaining this PDF',
         pdfContext: samplePdfContext,
         aspectRatio: '16:9',
         style: 'educational',

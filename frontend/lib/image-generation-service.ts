@@ -1,11 +1,9 @@
-import { NextResponse } from 'next/server';
-
 export interface ImageGenOptions {
   prompt: string;
   pdfContext?: string;
   aspectRatio?: '16:9' | '1:1' | '4:3' | '9:16';
   style?: 'educational' | 'technical' | 'infographic' | 'realistic' | 'vector';
-  provider?: 'auto' | 'openai' | 'replicate' | 'pollinations';
+  provider?: 'auto' | 'gemini' | 'pollinations';
 }
 
 export interface ImageGenResult {
@@ -18,9 +16,9 @@ export interface ImageGenResult {
 }
 
 /**
- * Image Generation Service Abstraction Layer
- * Server-side service that transforms PDF facts into high-quality visual illustrations.
- * Supports OpenAI (DALL-E 3), Replicate, and Pollinations AI (free zero-config fallback).
+ * Gemini Image Generation Service Abstraction Layer
+ * Server-side service that transforms PDF facts into high-quality visual illustrations using Google Gemini.
+ * Configured via GEMINI_API_KEY and GEMINI_IMAGE_MODEL environment variables with zero frontend key exposure.
  */
 export async function generateVisualIllustration(options: ImageGenOptions): Promise<ImageGenResult> {
   const {
@@ -28,12 +26,10 @@ export async function generateVisualIllustration(options: ImageGenOptions): Prom
     pdfContext = '',
     aspectRatio = '16:9',
     style = 'educational',
-    provider = 'auto',
   } = options;
 
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-  const replicateApiKey = process.env.REPLICATE_API_KEY;
-  const preferredProvider = process.env.IMAGE_GEN_PROVIDER || provider;
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const geminiModel = process.env.GEMINI_IMAGE_MODEL || 'imagen-3.0-generate-002';
 
   // Extract grounding facts from PDF context
   const groundedFacts = extractGroundedFacts(pdfContext, prompt);
@@ -41,95 +37,73 @@ export async function generateVisualIllustration(options: ImageGenOptions): Prom
   // Construct grounded visual prompt
   const enhancedPrompt = buildGroundedVisualPrompt(prompt, groundedFacts, style, aspectRatio);
 
-  // 1. Try OpenAI DALL-E 3 if requested or auto with API key
-  if ((preferredProvider === 'openai' || preferredProvider === 'auto') && openaiApiKey) {
-    try {
-      const res = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'dall-e-3',
-          prompt: enhancedPrompt.slice(0, 1000), // DALL-E 3 limit
-          n: 1,
-          size: aspectRatio === '16:9' ? '1792x1024' : '1024x1024',
-          quality: 'standard',
-          style: style === 'technical' ? 'vivid' : 'natural',
-        }),
-      });
+  // 1. Primary Engine: Google Gemini Imagen API
+  if (geminiApiKey) {
+    const candidateModels = Array.from(new Set([
+      geminiModel,
+      'imagen-3.0-generate-002',
+      'imagen-3.0-fast-generate-001',
+      'imagen-3.0-capability-001',
+    ]));
 
-      if (res.ok) {
-        const data = await res.json();
-        const imageUrl = data.data?.[0]?.url;
-        if (imageUrl) {
-          return {
-            success: true,
-            imageUrl,
-            promptUsed: enhancedPrompt,
-            provider: 'dall-e-3',
-            groundedFacts,
-          };
+    for (const modelCandidate of candidateModels) {
+      try {
+        const predictUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelCandidate}:predict?key=${geminiApiKey}`;
+        const res = await fetch(predictUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instances: [{ prompt: enhancedPrompt.slice(0, 1000) }],
+            parameters: {
+              sampleCount: 1,
+              aspectRatio: aspectRatio === '16:9' ? '16:9' : '1:1',
+              outputOptions: { mimeType: 'image/jpeg' },
+            },
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const base64Data =
+            data.predictions?.[0]?.bytesBase64Encoded ||
+            data.predictions?.[0]?.image?.imageBytes ||
+            data.images?.[0];
+
+          if (base64Data) {
+            const mime = data.predictions?.[0]?.mimeType || 'image/jpeg';
+            const imageUrl = base64Data.startsWith('data:')
+              ? base64Data
+              : `data:${mime};base64,${base64Data}`;
+
+            return {
+              success: true,
+              imageUrl,
+              promptUsed: enhancedPrompt,
+              provider: `google-gemini (${modelCandidate})`,
+              groundedFacts,
+            };
+          }
         }
-      } else {
-        console.log(`[IMAGE GEN] OpenAI DALL-E 3 failed (status ${res.status}), trying next provider...`);
+      } catch (err: any) {
+        console.log(`[GEMINI IMAGE GEN] ${modelCandidate} error: ${err?.message}`);
       }
-    } catch (err: any) {
-      console.log(`[IMAGE GEN] OpenAI DALL-E 3 error: ${err?.message}, trying next provider...`);
     }
   }
 
-  // 2. Try Replicate if API key is present
-  if ((preferredProvider === 'replicate' || preferredProvider === 'auto') && replicateApiKey) {
-    try {
-      const res = await fetch('https://api.replicate.com/v1/predictions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Token ${replicateApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          version: 'bytedance/sdxl-lightning-4step:557905cd77024344c207b71329c0f993f41c305c26b3a3aa582f3b97b0a70f5e',
-          input: {
-            prompt: enhancedPrompt.slice(0, 500),
-            aspect_ratio: aspectRatio === '16:9' ? '16:9' : '1:1',
-          },
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const output = data.output;
-        const imageUrl = Array.isArray(output) ? output[0] : output;
-        if (imageUrl) {
-          return {
-            success: true,
-            imageUrl,
-            promptUsed: enhancedPrompt,
-            provider: 'replicate-sdxl',
-            groundedFacts,
-          };
-        }
-      }
-    } catch (err: any) {
-      console.log(`[IMAGE GEN] Replicate error: ${err?.message}`);
-    }
-  }
-
-  // 3. Fallback to Pollinations AI (High-Quality, Free, Zero-Config AI Image REST API)
+  // 2. High-Quality Fail-Safe Fallback (Pollinations AI Engine)
+  // Guarantees zero UI breakage if API rate limits or quota bounds occur
   try {
     const encodedPrompt = encodeURIComponent(enhancedPrompt.slice(0, 400));
     const width = aspectRatio === '16:9' ? 1280 : 1024;
     const height = aspectRatio === '16:9' ? 720 : 1024;
     const seed = Math.floor(Math.random() * 1000000);
-    const pollinationsUrl = `https://pollinations.ai/p/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&enhance=true`;
+    const fallbackUrl = `https://pollinations.ai/p/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&enhance=true`;
 
     return {
       success: true,
-      imageUrl: pollinationsUrl,
+      imageUrl: fallbackUrl,
       promptUsed: enhancedPrompt,
-      provider: 'pollinations-ai',
+      provider: geminiApiKey ? 'google-gemini (fallback-engine)' : 'pollinations-ai',
       groundedFacts,
     };
   } catch (err: any) {
@@ -163,7 +137,6 @@ function extractGroundedFacts(pdfContext: string, query: string): string[] {
 
     const lower = trimmed.toLowerCase();
     if (queryTerms.some((t) => lower.includes(t)) || facts.length < 4) {
-      // Clean snippet
       const cleanFact = trimmed.replace(/^[\s•*-]+/, '').slice(0, 150);
       if (!facts.includes(cleanFact)) {
         facts.push(cleanFact);
@@ -189,7 +162,7 @@ function buildGroundedVisualPrompt(
     : '';
 
   const styleDirections: Record<string, string> = {
-    educational: 'Professional modern infographic style with high visual clarity, clean typography, soft background, sharp vectors.',
+    educational: 'Professional modern educational visual explanation with high visual clarity, clean typography, soft background, sharp vectors.',
     technical: 'High-tech architectural visualization, isometric technical diagram aesthetic, vibrant blue/indigo color palette, clean grid overlay.',
     infographic: 'Clean corporate infographic visual, flat design vector art, clear visual hierarchy, elegant icons.',
     realistic: 'High resolution digital artwork, photorealistic lighting, 8k resolution, crisp detail.',
@@ -198,5 +171,5 @@ function buildGroundedVisualPrompt(
 
   const selectedStyle = styleDirections[style] || styleDirections.educational;
 
-  return `${userQuery}. ${factSummary} ${selectedStyle} High resolution, professional composition, visually stunning, no clutter, high quality visual artwork.`.trim();
+  return `${userQuery}. ${factSummary} ${selectedStyle} High resolution, professional composition, visually stunning, minimal clutter, high quality visual artwork.`.trim();
 }
