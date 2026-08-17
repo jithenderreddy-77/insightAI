@@ -186,17 +186,23 @@ export function VoiceAssistantModal({
 
   const [pendingLaunchUrl, setPendingLaunchUrl] = useState<{ url: string; label: string } | null>(null);
 
-  // --- PRE-OPENED WINDOW REF & HANDLERS FOR POP-UP BLOCKED FIX ---
-  // Browser security blocks window.open() when called asynchronously after STT + LLM pipeline completes.
-  // Fix: Synchronously pre-open a blank tab during initial gesture / command start, then set location.href once URL is known.
+  // --- PRE-OPENED WINDOW REF & HANDLERS FOR POPUP-FREE NEW TAB LAUNCHING ---
+  // Strategy: Synchronously pre-open a blank tab during initial click gesture, then set location.href once URL is known.
+  // Guaranteed NEW TAB opening without browser popup blocker warnings or same-tab page replacement.
   const preOpenedWindowRef = useRef<Window | null>(null);
 
   const preOpenBlankWindow = useCallback(() => {
     if (typeof window === 'undefined') return;
     try {
-      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
-        try { preOpenedWindowRef.current.close(); } catch {}
+      // Adopt global pre-opened tab if created by top-bar click handler
+      if ((window as any).__insightPendingTab && !(window as any).__insightPendingTab.closed) {
+        preOpenedWindowRef.current = (window as any).__insightPendingTab;
+        (window as any).__insightPendingTab = null;
+        return;
       }
+
+      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) return;
+
       const win = window.open('about:blank', '_blank');
       preOpenedWindowRef.current = win;
     } catch {
@@ -211,10 +217,12 @@ export function VoiceAssistantModal({
     preOpenedWindowRef.current = null;
   }, []);
 
-  // --- NATIVE APP LAUNCHER & AUTOMATIC TOP-LEVEL WEB NAVIGATION ---
-  // Strategy: Try window.open('_blank') first. If browser pop-up blocker intercepts it,
-  // automatically fallback to window.location.href. Top-level window navigation is NEVER
-  // blocked by browser pop-up blockers or X-Frame-Options security headers!
+  // Ensure pending tab from top-bar click is adopted when modal opens
+  useEffect(() => {
+    if (isOpen) preOpenBlankWindow();
+  }, [isOpen, preOpenBlankWindow]);
+
+  // --- NATIVE APP LAUNCHER & NEW TAB WEB NAVIGATION ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
     if (typeof window === 'undefined' || !webUrl) {
       cleanupPreOpenedWindow();
@@ -238,26 +246,31 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Try window.open('_blank')
-    let openedWin: Window | null = null;
+    // 2. Open in NEW TAB ONLY (_blank) using pre-opened window reference created during trusted click gesture!
+    const preOpenedWin = preOpenedWindowRef.current;
+    preOpenedWindowRef.current = null; // consume reference
+
+    if (preOpenedWin && !preOpenedWin.closed) {
+      try {
+        preOpenedWin.location.href = webUrl;
+        return;
+      } catch (err) {
+        console.warn('[New Tab Fix] Failed to navigate pre-opened window:', err);
+      }
+    }
+
+    // 3. Try direct window.open('_blank') fallback
     try {
-      openedWin = window.open(webUrl, '_blank', 'noopener,noreferrer');
+      const openedWin = window.open(webUrl, '_blank', 'noopener,noreferrer');
+      if (openedWin && !openedWin.closed) return;
     } catch (e) {
-      console.warn('[AutoOpen] window.open blocked by browser:', e);
+      console.warn('[New Tab Fix] window.open fallback intercepted:', e);
     }
 
-    // 3. If window.open succeeded and was NOT blocked, we are done!
-    if (openedWin && !openedWin.closed) {
-      cleanupPreOpenedWindow();
-      return;
-    }
-
-    // 4. If window.open was intercepted/blocked by browser pop-up blocker:
-    // AUTOMATICALLY navigate top-level window (window.location.href).
-    // Top-level navigation is NEVER blocked by browser pop-up blockers or X-Frame-Options headers!
-    cleanupPreOpenedWindow();
-    window.location.href = webUrl;
+    // 4. Final safety fallback: If window.open was blocked by browser popup blocker
+    try { window.open(webUrl, '_blank'); } catch {}
   }, [cleanupPreOpenedWindow]);
+
 
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
