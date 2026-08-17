@@ -186,50 +186,9 @@ export function VoiceAssistantModal({
 
   const [pendingLaunchUrl, setPendingLaunchUrl] = useState<{ url: string; label: string } | null>(null);
 
-  // --- PRE-OPENED WINDOW REF & HANDLERS FOR POPUP-FREE NEW TAB LAUNCHING ---
-  // Strategy: Synchronously pre-open a blank tab during initial click gesture, then set location.href once URL is known.
-  // Guaranteed NEW TAB opening without browser popup blocker warnings or same-tab page replacement.
-  const preOpenedWindowRef = useRef<Window | null>(null);
-
-  const preOpenBlankWindow = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      // Adopt global pre-opened tab if created by top-bar click handler
-      if ((window as any).__insightPendingTab && !(window as any).__insightPendingTab.closed) {
-        preOpenedWindowRef.current = (window as any).__insightPendingTab;
-        (window as any).__insightPendingTab = null;
-        return;
-      }
-
-      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) return;
-
-      const win = window.open('about:blank', '_blank');
-      preOpenedWindowRef.current = win;
-    } catch {
-      preOpenedWindowRef.current = null;
-    }
-  }, []);
-
-  const cleanupPreOpenedWindow = useCallback(() => {
-    if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
-      try { preOpenedWindowRef.current.close(); } catch {}
-    }
-    preOpenedWindowRef.current = null;
-  }, []);
-
-  // Ensure pending tab from top-bar click is adopted when modal opens
-  useEffect(() => {
-    if (isOpen) preOpenBlankWindow();
-  }, [isOpen, preOpenBlankWindow]);
-
   // --- NATIVE APP LAUNCHER & NEW TAB WEB NAVIGATION ---
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
-    if (typeof window === 'undefined' || !webUrl) {
-      cleanupPreOpenedWindow();
-      return;
-    }
-
-    const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
+    if (typeof window === 'undefined' || !webUrl) return;
 
     // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, etc.)
     if (nativeScheme) {
@@ -246,30 +205,14 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Open in NEW TAB ONLY (_blank) using pre-opened window reference created during trusted click gesture!
-    const preOpenedWin = preOpenedWindowRef.current;
-    preOpenedWindowRef.current = null; // consume reference
-
-    if (preOpenedWin && !preOpenedWin.closed) {
-      try {
-        preOpenedWin.location.href = webUrl;
-        return;
-      } catch (err) {
-        console.warn('[New Tab Fix] Failed to navigate pre-opened window:', err);
-      }
-    }
-
-    // 3. Try direct window.open('_blank') fallback
+    // 2. Always open cleanly in a NEW TAB (_blank)
     try {
-      const openedWin = window.open(webUrl, '_blank', 'noopener,noreferrer');
-      if (openedWin && !openedWin.closed) return;
+      window.open(webUrl, '_blank', 'noopener,noreferrer');
     } catch (e) {
-      console.warn('[New Tab Fix] window.open fallback intercepted:', e);
+      console.warn('[Voice Action] window.open error:', e);
     }
+  }, []);
 
-    // 4. Final safety fallback: If window.open was blocked by browser popup blocker
-    try { window.open(webUrl, '_blank'); } catch {}
-  }, [cleanupPreOpenedWindow]);
 
 
 
@@ -1155,10 +1098,7 @@ export function VoiceAssistantModal({
       isProcessingRef.current = true;
       shouldRestartRef.current = false;
 
-      // PRE-OPEN BLANK TAB synchronously while browser still considers this a user gesture.
-      // If the command results in opening a URL, safeOpenUrl() will navigate this tab.
-      // If not (e.g. knowledge answer, math, weather), cleanupPreOpenedWindow() closes it in finally.
-      preOpenBlankWindow();
+
 
       setAssistantState('thinking');
       setActionNotice(null);
@@ -1300,13 +1240,12 @@ export function VoiceAssistantModal({
         console.error('Voice command error:', err);
         speakVoiceResponse('Sorry, there was an issue. Please try again.');
       } finally {
-        // Close pre-opened blank tab if no URL navigation consumed it (e.g. knowledge answer, time query)
-        cleanupPreOpenedWindow();
         isProcessingRef.current = false;
       }
     },
-    [hasActiveDocuments, matchClientInstantAction, preOpenBlankWindow, cleanupPreOpenedWindow, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
+    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
   );
+
 
   // --- SPEECH RECOGNITION INIT (Optimized for Laptop & Mobile browsers) ---
   const interimTimerRef = useRef<NodeJS.Timeout | null>(null);
