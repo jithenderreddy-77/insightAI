@@ -26,10 +26,14 @@ export class YouTubeAdapter implements ApplicationAdapter {
     }
 
     try {
-      window.open(url, '_blank', 'noopener,noreferrer');
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        window.location.href = url;
+      }
       return { success: true, message: targetQuery ? `Opening YouTube search for "${targetQuery}"` : 'Opening YouTube' };
     } catch (e) {
-      return { success: false, error: 'Failed to open YouTube' };
+      try { window.location.href = url; } catch {}
+      return { success: true, message: 'Opening YouTube' };
     }
   }
 

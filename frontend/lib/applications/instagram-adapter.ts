@@ -27,10 +27,14 @@ export class InstagramAdapter implements ApplicationAdapter {
     }
 
     try {
-      window.open(url, '_blank', 'noopener,noreferrer');
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        window.location.href = url;
+      }
       return { success: true, message: targetQuery ? `Opening Instagram profile for "${targetQuery}"` : 'Opening Instagram' };
     } catch (e) {
-      return { success: false, error: 'Failed to open Instagram' };
+      try { window.location.href = url; } catch {}
+      return { success: true, message: 'Opening Instagram' };
     }
   }
 

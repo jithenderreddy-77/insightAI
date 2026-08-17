@@ -209,11 +209,16 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Always open cleanly in a NEW TAB (_blank)
+    // 2. Always open cleanly in a NEW TAB (_blank) with pop-up block detection & fallback
     try {
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
+      const win = window.open(webUrl, '_blank', 'noopener,noreferrer');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        // Pop-up was blocked by browser! Fall back to current window location
+        window.location.href = webUrl;
+      }
     } catch (e) {
       console.warn('[Voice Action] window.open error:', e);
+      try { window.location.href = webUrl; } catch {}
     }
   }, []);
 
