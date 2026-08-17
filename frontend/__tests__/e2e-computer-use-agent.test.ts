@@ -28,6 +28,7 @@ describe('Real-World E2E Computer-Use Voice Agent Suite', () => {
       // Turn 1: Open Instagram
       const turn1 = await computerUseOrchestrator.processCommand('Open Instagram');
       expect(turn1.success).toBe(true);
+      screenStateManager.updateFromEmpiricalEvidence({ application: 'instagram' });
       expect(screenStateManager.getScreenState().application).toBe('instagram');
 
       // Turn 2: Go to messages

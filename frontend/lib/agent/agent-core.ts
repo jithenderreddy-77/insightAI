@@ -102,60 +102,20 @@ export class AgentCore {
       }
     }
 
-    // ── FALLBACK EXECUTION PATH (WHEN EXTENSION UNCONNECTED) ──
-    screenStateManager.updateApp(adapter.id);
+    // ── FALLBACK EXECUTION PATH (STRICTLY ISOLATED WHEN EXTENSION UNCONNECTED) ──
+    // Note: Fallback path DOES NOT mutate ScreenState. ScreenState mutates ONLY on empirical extension evidence.
     this.setState('EXECUTING');
 
     try {
-      // 1. Observe screen state before action
-      const observation = await adapter.observe();
-
-      // 2. Perform intent action via App Adapter
       let actionRes = await adapter.open(userGoal);
       if (!actionRes.success) {
         actionRes = await adapter.search(userGoal);
       }
 
-      this.setState('VERIFYING');
-      const verification = await actionVerifier.verify({
-        id: actionId,
-        type: 'OPEN_APP',
-        timeoutMs: 3000,
-        riskLevel: 'LOW',
-        description: `Execute ${userGoal}`,
-      });
-
-      if (!verification.success) {
-        this.setState('RECOVERING');
-        const category = agentRecoveryEngine.classifyFailure(verification.mismatchReason);
-        const strategy = agentRecoveryEngine.getStrategy(category, {
-          id: actionId,
-          type: 'OPEN_APP',
-          target: userGoal,
-          timeoutMs: 3000,
-          riskLevel: 'LOW',
-          description: userGoal,
-        });
-
-        if (strategy.userEscalationMessage) {
-          this.setState('WAITING_FOR_USER');
-          return { success: false, finalMessage: strategy.userEscalationMessage, actionsExecuted: 1 };
-        }
-      }
-
       this.setState('COMPLETED');
-      screenStateManager.setLastSuccessfulAction({
-        id: actionId,
-        type: 'OPEN_APP',
-        target: userGoal,
-        timeoutMs: 3000,
-        riskLevel: 'LOW',
-        description: userGoal,
-      });
-
       return {
         success: true,
-        finalMessage: actionRes.message || `Successfully completed "${userGoal}"`,
+        finalMessage: actionRes.message || `Launched URL for "${userGoal}" (Extension disconnected - ScreenState unmutated)`,
         actionsExecuted: 1,
       };
     } catch (err: any) {
