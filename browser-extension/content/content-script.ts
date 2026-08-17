@@ -1,6 +1,8 @@
 // browser-extension/content/content-script.ts
 // Primary Content Script Entrypoint
 
+declare const chrome: any;
+
 import { contentDomPerception } from './dom-perception';
 import { contentActionExecutor } from './action-executor';
 import { contentScrollingController } from './scrolling-controller';
@@ -15,7 +17,7 @@ class ContentScriptController {
   private initListeners() {
     if (typeof chrome === 'undefined' || !chrome.runtime) return;
 
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
       this.handleIncomingMessage(message, sendResponse);
       return true; // Async response
     });

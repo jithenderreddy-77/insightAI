@@ -1,6 +1,8 @@
 // browser-extension/background/service-worker.ts
 // Manifest V3 Background Service Worker & TargetTabLock Registry
 
+declare const chrome: any;
+
 import { BridgeMessageEnvelope, ExtensionActionPayload } from '../shared/message-types';
 import { ProtocolSecurity } from '../shared/protocol';
 
@@ -23,7 +25,7 @@ class ExtensionServiceWorker {
   private initListeners() {
     // Listen for external messages from web application (externally_connectable)
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessageExternal) {
-      chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+      chrome.runtime.onMessageExternal.addListener((message: any, sender: any, sendResponse: any) => {
         this.handleWebMessage(message, sender, sendResponse);
         return true; // Async response
       });
@@ -31,7 +33,7 @@ class ExtensionServiceWorker {
 
     // Listen for internal messages from content scripts
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
         this.handleContentScriptMessage(message, sender, sendResponse);
         return true;
       });
@@ -113,8 +115,8 @@ class ExtensionServiceWorker {
   private async discoverTabs(): Promise<Array<{ tabId: number; title: string; url: string; appName: string }>> {
     if (typeof chrome === 'undefined' || !chrome.tabs) return [];
     return new Promise((resolve) => {
-      chrome.tabs.query({}, (tabs) => {
-        const results = tabs.map((t) => ({
+      chrome.tabs.query({}, (tabs: any[]) => {
+        const results = (tabs || []).map((t: any) => ({
           tabId: t.id || 0,
           title: t.title || '',
           url: t.url || '',
@@ -128,7 +130,7 @@ class ExtensionServiceWorker {
   private async lockTargetTab(tabId: number, appName: string): Promise<LockedTargetTab | null> {
     if (typeof chrome === 'undefined' || !chrome.tabs) return null;
     return new Promise((resolve) => {
-      chrome.tabs.get(tabId, (tab) => {
+      chrome.tabs.get(tabId, (tab: any) => {
         if (!tab) {
           resolve(null);
           return;
@@ -155,7 +157,7 @@ class ExtensionServiceWorker {
     const tabId = this.activeTargetTab.tabId;
 
     return new Promise((resolve) => {
-      chrome.tabs.sendMessage(tabId, { type: 'EXECUTE_CONTENT_ACTION', payload }, (response) => {
+      chrome.tabs.sendMessage(tabId, { type: 'EXECUTE_CONTENT_ACTION', payload }, (response: any) => {
         if (chrome.runtime.lastError) {
           resolve({ success: false, error: chrome.runtime.lastError.message });
           return;
@@ -170,7 +172,7 @@ class ExtensionServiceWorker {
       return { success: true };
     }
     return new Promise((resolve) => {
-      chrome.tabs.sendMessage(this.activeTargetTab!.tabId, { type: 'CANCEL_CONTENT_ACTION', actionId }, (res) => {
+      chrome.tabs.sendMessage(this.activeTargetTab!.tabId, { type: 'CANCEL_CONTENT_ACTION', actionId }, (res: any) => {
         resolve(res || { success: true });
       });
     });
