@@ -211,10 +211,10 @@ export function VoiceAssistantModal({
     preOpenedWindowRef.current = null;
   }, []);
 
-  // --- NATIVE APP LAUNCHER & FULLY AUTOMATIC WEB FALLBACK ---
-  // Strategy: Try window.open first. If blocked → auto-embed iframe. ZERO clicks required.
-  const [showEmbeddedFrame, setShowEmbeddedFrame] = useState<boolean>(false);
-
+  // --- NATIVE APP LAUNCHER & AUTOMATIC TOP-LEVEL WEB NAVIGATION ---
+  // Strategy: Try window.open('_blank') first. If browser pop-up blocker intercepts it,
+  // automatically fallback to window.location.href. Top-level window navigation is NEVER
+  // blocked by browser pop-up blockers or X-Frame-Options security headers!
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
     if (typeof window === 'undefined' || !webUrl) {
       cleanupPreOpenedWindow();
@@ -223,7 +223,7 @@ export function VoiceAssistantModal({
 
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
 
-    // 1. Attempt native app protocol trigger FIRST (whatsapp://, spotify://, etc.)
+    // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, etc.)
     if (nativeScheme) {
       try {
         const iframe = document.createElement('iframe');
@@ -238,22 +238,27 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Try window.open — if it succeeds, we're done. NO card shown.
+    // 2. Try window.open('_blank')
+    let openedWin: Window | null = null;
     try {
-      const opened = window.open(webUrl, '_blank', 'noopener,noreferrer');
-      if (opened && !opened.closed) {
-        cleanupPreOpenedWindow();
-        // Success — don't show any card
-        return;
-      }
+      openedWin = window.open(webUrl, '_blank', 'noopener,noreferrer');
     } catch (e) {
-      console.warn('[AutoOpen] window.open blocked:', e);
+      console.warn('[AutoOpen] window.open blocked by browser:', e);
     }
 
-    // 3. Pop-up was blocked → auto-show embedded iframe (no clicks required)
-    setPendingLaunchUrl({ url: webUrl, label });
-    setShowEmbeddedFrame(true);
+    // 3. If window.open succeeded and was NOT blocked, we are done!
+    if (openedWin && !openedWin.closed) {
+      cleanupPreOpenedWindow();
+      return;
+    }
+
+    // 4. If window.open was intercepted/blocked by browser pop-up blocker:
+    // AUTOMATICALLY navigate top-level window (window.location.href).
+    // Top-level navigation is NEVER blocked by browser pop-up blockers or X-Frame-Options headers!
+    cleanupPreOpenedWindow();
+    window.location.href = webUrl;
   }, [cleanupPreOpenedWindow]);
+
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1582,41 +1587,7 @@ export function VoiceAssistantModal({
             )}
           </div>
 
-          {/* Auto-Embedded OS Web App Window — shown automatically when popup blocked */}
-          {pendingLaunchUrl && showEmbeddedFrame && (
-            <div className="w-full rounded-2xl overflow-hidden border border-cyan-500/40 bg-slate-950 flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200" style={{ height: '20rem' }}>
-              {/* Slim title bar */}
-              <div className="flex items-center justify-between p-2 px-3 bg-gradient-to-r from-slate-900 to-cyan-950 border-b border-cyan-500/30 text-xs shrink-0">
-                <span className="font-bold text-cyan-300 flex items-center gap-1.5 truncate">
-                  <Globe className="w-3.5 h-3.5 text-cyan-400" /> {pendingLaunchUrl.label}
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <a
-                    href={pendingLaunchUrl.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
-                    className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-bold flex items-center gap-1 transition-colors"
-                  >
-                    <ExternalLink className="w-3 h-3" /> Open Tab
-                  </a>
-                  <button
-                    onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
-                    className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
-                    title="Close"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-              <iframe
-                src={pendingLaunchUrl.url}
-                className="w-full flex-1 border-0 bg-white"
-                title={pendingLaunchUrl.label}
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-              />
-            </div>
-          )}
+
 
           {/* Pending Delete Choice Card */}
           {pendingDeleteChoice && (
