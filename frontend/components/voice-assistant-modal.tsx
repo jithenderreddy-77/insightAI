@@ -211,7 +211,8 @@ export function VoiceAssistantModal({
     preOpenedWindowRef.current = null;
   }, []);
 
-  // --- NATIVE APP LAUNCHER & NEW TAB WEB FALLBACK ---
+  // --- NATIVE APP LAUNCHER & FULLY AUTOMATIC WEB FALLBACK ---
+  // Strategy: Try window.open first. If blocked → auto-embed iframe. ZERO clicks required.
   const [showEmbeddedFrame, setShowEmbeddedFrame] = useState<boolean>(false);
 
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
@@ -221,9 +222,8 @@ export function VoiceAssistantModal({
     }
 
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
-    setPendingLaunchUrl({ url: webUrl, label });
 
-    // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, etc.)
+    // 1. Attempt native app protocol trigger FIRST (whatsapp://, spotify://, etc.)
     if (nativeScheme) {
       try {
         const iframe = document.createElement('iframe');
@@ -238,16 +238,21 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Try window.open fallback cleanly
+    // 2. Try window.open — if it succeeds, we're done. NO card shown.
     try {
       const opened = window.open(webUrl, '_blank', 'noopener,noreferrer');
       if (opened && !opened.closed) {
         cleanupPreOpenedWindow();
+        // Success — don't show any card
         return;
       }
     } catch (e) {
-      console.warn('[Pop-up Fix] window.open intercepted by browser pop-up blocker:', e);
+      console.warn('[AutoOpen] window.open blocked:', e);
     }
+
+    // 3. Pop-up was blocked → auto-show embedded iframe (no clicks required)
+    setPendingLaunchUrl({ url: webUrl, label });
+    setShowEmbeddedFrame(true);
   }, [cleanupPreOpenedWindow]);
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
@@ -1577,66 +1582,39 @@ export function VoiceAssistantModal({
             )}
           </div>
 
-          {/* Popup-Blocker Bypass 1-Click Launch Card & Embedded OS Window */}
-          {pendingLaunchUrl && (
-            <div className="w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-950/90 to-indigo-950/90 border border-cyan-500/50 text-left space-y-2.5 animate-in fade-in zoom-in duration-200 shadow-xl">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                  <Zap className="w-3.5 h-3.5 text-cyan-400" /> Web Application Ready
+          {/* Auto-Embedded OS Web App Window — shown automatically when popup blocked */}
+          {pendingLaunchUrl && showEmbeddedFrame && (
+            <div className="w-full rounded-2xl overflow-hidden border border-cyan-500/40 bg-slate-950 flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200" style={{ height: '20rem' }}>
+              {/* Slim title bar */}
+              <div className="flex items-center justify-between p-2 px-3 bg-gradient-to-r from-slate-900 to-cyan-950 border-b border-cyan-500/30 text-xs shrink-0">
+                <span className="font-bold text-cyan-300 flex items-center gap-1.5 truncate">
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" /> {pendingLaunchUrl.label}
                 </span>
-                <span className="text-[10px] text-cyan-400 font-mono bg-cyan-950/80 px-2 py-0.5 rounded-md border border-cyan-800">1-Click Launch</span>
-              </div>
-              <p className="text-xs text-slate-300 leading-snug">
-                Click below to launch <span className="font-bold text-cyan-200">{pendingLaunchUrl.label}</span> or view inside Insight OS:
-              </p>
-              <div className="flex flex-wrap gap-2 pt-0.5">
-                <a
-                  href={pendingLaunchUrl.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setPendingLaunchUrl(null)}
-                  className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold text-center shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  🚀 Open {pendingLaunchUrl.label} Now
-                </a>
-                <button
-                  onClick={() => setShowEmbeddedFrame(!showEmbeddedFrame)}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-semibold flex items-center gap-1"
-                >
-                  <Globe className="w-3.5 h-3.5 text-cyan-400" /> {showEmbeddedFrame ? 'Hide Window' : '📺 Embedded OS View'}
-                </button>
-                <button
-                  onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
-                  className="px-2.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 text-xs font-semibold"
-                >
-                  Dismiss
-                </button>
-              </div>
-
-              {/* Embedded In-App OS Web App Frame Viewer */}
-              {showEmbeddedFrame && (
-                <div className="mt-3 rounded-xl overflow-hidden border border-cyan-500/40 bg-slate-950 flex flex-col h-72 shadow-2xl animate-in zoom-in-95 duration-200">
-                  <div className="flex items-center justify-between p-2 px-3 bg-slate-900 border-b border-slate-800 text-xs">
-                    <span className="font-bold text-cyan-300 flex items-center gap-1.5 truncate">
-                      <Globe className="w-3.5 h-3.5 text-cyan-400" /> {pendingLaunchUrl.label}
-                    </span>
-                    <a
-                      href={pendingLaunchUrl.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-bold flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" /> Open Full Screen Tab
-                    </a>
-                  </div>
-                  <iframe
-                    src={pendingLaunchUrl.url}
-                    className="w-full flex-1 border-0 bg-white"
-                    title={pendingLaunchUrl.label}
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                  />
+                <div className="flex items-center gap-1.5">
+                  <a
+                    href={pendingLaunchUrl.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
+                    className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Open Tab
+                  </a>
+                  <button
+                    onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
+                    className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+                    title="Close"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-              )}
+              </div>
+              <iframe
+                src={pendingLaunchUrl.url}
+                className="w-full flex-1 border-0 bg-white"
+                title={pendingLaunchUrl.label}
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+              />
             </div>
           )}
 
