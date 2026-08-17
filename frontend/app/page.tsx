@@ -1302,15 +1302,7 @@ export default function Home() {
               {/* Glowing Icon-Only Siri/Alexa Voice Assistant Trigger */}
               <button
                 className="p-1.5 px-2 rounded-2xl border border-cyan-400/60 bg-gradient-to-r from-cyan-500/20 via-fuchsia-500/20 to-indigo-500/20 hover:from-cyan-500/35 hover:to-indigo-500/35 shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
-                onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    try {
-                      const win = window.open('about:blank', '_blank');
-                      (window as any).__insightPendingTab = win;
-                    } catch {}
-                  }
-                  setIsVoiceModalOpen(true);
-                }}
+                onClick={() => setIsVoiceModalOpen(true)}
                 title="Activate Insight Voice Siri/Alexa Assistant"
               >
                 <AnimatedVoiceLogo size="sm" />

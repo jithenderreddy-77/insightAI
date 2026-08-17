@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare, UserPlus, Send, Brain, ShieldAlert, Activity, Code2, Clock, Settings, Search } from 'lucide-react';
+import { Mic, MicOff, X, Sparkles, Volume2, Zap, Minimize2, Maximize2, Phone, CheckCircle2, MessageSquare, UserPlus, Send, Brain, ShieldAlert, Activity, Code2, Clock, Settings, Search, Globe, ExternalLink } from 'lucide-react';
 import { AnimatedVoiceLogo } from '@/components/animated-voice-logo';
 import { getSavedUser } from '@/lib/history-store';
 import { searchContacts, syncDeviceContacts, getSavedContacts, recordContactInteraction, upsertContact, type Contact } from '@/lib/contacts-store';
@@ -188,109 +188,42 @@ export function VoiceAssistantModal({
 
   // --- PRE-OPENED WINDOW REF & HANDLERS FOR POP-UP BLOCKED FIX ---
   // Browser security blocks window.open() when called asynchronously after STT + LLM pipeline completes.
-  // Fix: Synchronously pre-open a blank tab during initial trusted user click gesture, then set location.href once URL is known.
+  // Fix: Synchronously pre-open a blank tab during initial gesture / command start, then set location.href once URL is known.
   const preOpenedWindowRef = useRef<Window | null>(null);
-  const pendingTabTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const preOpenBlankWindow = useCallback(() => {
     if (typeof window === 'undefined') return;
     try {
-      // 1. Adopt global pre-opened tab if created by top-bar click handler
-      if ((window as any).__insightPendingTab && !(window as any).__insightPendingTab.closed) {
-        preOpenedWindowRef.current = (window as any).__insightPendingTab;
-        (window as any).__insightPendingTab = null;
-      } else {
-        if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
-          try { preOpenedWindowRef.current.close(); } catch {}
-        }
-        const win = window.open('about:blank', '_blank');
-        preOpenedWindowRef.current = win;
+      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
+        try { preOpenedWindowRef.current.close(); } catch {}
       }
-
-      const win = preOpenedWindowRef.current;
-      if (win) {
-        try {
-          win.document.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="utf-8" />
-                <title>Insight AI OS — Processing Command</title>
-                <style>
-                  body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                    background: #090d16;
-                    color: #f8fafc;
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100vh;
-                    margin: 0;
-                  }
-                  .glow-ring {
-                    width: 64px;
-                    height: 64px;
-                    border: 3px solid rgba(6, 182, 212, 0.2);
-                    border-top-color: #06b6d4;
-                    border-right-color: #c084fc;
-                    border-radius: 50%;
-                    animation: spin 1s infinite linear;
-                  }
-                  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                  h2 { margin-top: 24px; font-size: 18px; font-weight: 700; background: linear-gradient(135deg, #38bdf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-                  p { color: #94a3b8; font-size: 13px; margin-top: 6px; }
-                </style>
-              </head>
-              <body>
-                <div class="glow-ring"></div>
-                <h2>Insight AI OS</h2>
-                <p>Listening for your voice command...</p>
-              </body>
-            </html>
-          `);
-        } catch {}
-      }
-
-      if (pendingTabTimeoutRef.current) clearTimeout(pendingTabTimeoutRef.current);
-      pendingTabTimeoutRef.current = setTimeout(() => {
-        if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
-          try { preOpenedWindowRef.current.close(); } catch {}
-        }
-        preOpenedWindowRef.current = null;
-      }, 10000);
+      const win = window.open('about:blank', '_blank');
+      preOpenedWindowRef.current = win;
     } catch {
       preOpenedWindowRef.current = null;
     }
   }, []);
 
   const cleanupPreOpenedWindow = useCallback(() => {
-    if (pendingTabTimeoutRef.current) {
-      clearTimeout(pendingTabTimeoutRef.current);
-      pendingTabTimeoutRef.current = null;
-    }
     if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
       try { preOpenedWindowRef.current.close(); } catch {}
     }
     preOpenedWindowRef.current = null;
   }, []);
 
-  // --- NATIVE APP LAUNCHER & NEW TAB WEB FALLBACK (NEVER REPLACES INSIGHT TAB) ---
+  // --- NATIVE APP LAUNCHER & NEW TAB WEB FALLBACK ---
+  const [showEmbeddedFrame, setShowEmbeddedFrame] = useState<boolean>(false);
+
   const safeOpenUrl = useCallback((webUrl: string, nativeScheme?: string, appLabel?: string) => {
     if (typeof window === 'undefined' || !webUrl) {
       cleanupPreOpenedWindow();
       return;
     }
 
-    if (pendingTabTimeoutRef.current) {
-      clearTimeout(pendingTabTimeoutRef.current);
-      pendingTabTimeoutRef.current = null;
-    }
-
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
     setPendingLaunchUrl({ url: webUrl, label });
 
-    // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, vscode://, etc.)
+    // 1. Attempt native app protocol trigger FIRST if scheme is available (whatsapp://, spotify://, etc.)
     if (nativeScheme) {
       try {
         const iframe = document.createElement('iframe');
@@ -301,33 +234,21 @@ export function VoiceAssistantModal({
           try { if (document.body.contains(iframe)) document.body.removeChild(iframe); } catch {}
         }, 2000);
       } catch {
-        // Fallback protocol trigger
         try { window.location.href = nativeScheme; } catch {}
       }
     }
 
-    // 2. Open in NEW TAB ONLY (_blank) — Using pre-opened window reference to eliminate pop-up blocked warnings!
-    const preOpenedWin = preOpenedWindowRef.current;
-    preOpenedWindowRef.current = null; // Consume reference
-
-    if (preOpenedWin && !preOpenedWin.closed) {
-      try {
-        preOpenedWin.location.href = webUrl;
-        return;
-      } catch (err) {
-        console.warn('[Pop-up Fix] Failed to navigate pre-opened tab, using window.open fallback:', err);
-      }
-    }
-
-    // Fallback for direct user click handlers or if pre-opened window reference was unavailable
+    // 2. Try window.open fallback cleanly
     try {
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
+      const opened = window.open(webUrl, '_blank', 'noopener,noreferrer');
+      if (opened && !opened.closed) {
+        cleanupPreOpenedWindow();
+        return;
+      }
     } catch (e) {
       console.warn('[Pop-up Fix] window.open intercepted by browser pop-up blocker:', e);
     }
   }, [cleanupPreOpenedWindow]);
-
-
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1497,17 +1418,14 @@ export function VoiceAssistantModal({
     if (assistantState === 'listening' || assistantState === 'waiting') {
       shouldRestartRef.current = false;
       try { recognitionRef.current.stop(); } catch {}
-      cleanupPreOpenedWindow();
       setAssistantState('idle');
     } else {
-      preOpenBlankWindow();
       isProcessingRef.current = false;
       shouldRestartRef.current = true;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
       try { recognitionRef.current.start(); } catch {}
     }
   };
-
 
   if (!isOpen) return null;
 
@@ -1659,35 +1577,66 @@ export function VoiceAssistantModal({
             )}
           </div>
 
-          {/* Popup-Blocker Bypass 1-Click Launch Card */}
+          {/* Popup-Blocker Bypass 1-Click Launch Card & Embedded OS Window */}
           {pendingLaunchUrl && (
-            <div className="w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-950/80 to-indigo-950/80 border border-cyan-500/50 text-left space-y-2 animate-in fade-in zoom-in duration-200">
+            <div className="w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-950/90 to-indigo-950/90 border border-cyan-500/50 text-left space-y-2.5 animate-in fade-in zoom-in duration-200 shadow-xl">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
                   <Zap className="w-3.5 h-3.5 text-cyan-400" /> Web Application Ready
                 </span>
-                <span className="text-[10px] text-slate-400 font-mono">1-Click Launch</span>
+                <span className="text-[10px] text-cyan-400 font-mono bg-cyan-950/80 px-2 py-0.5 rounded-md border border-cyan-800">1-Click Launch</span>
               </div>
-              <p className="text-xs text-slate-300">
-                Click below to open <span className="font-semibold text-cyan-200">{pendingLaunchUrl.label}</span> (bypasses browser pop-up blockers):
+              <p className="text-xs text-slate-300 leading-snug">
+                Click below to launch <span className="font-bold text-cyan-200">{pendingLaunchUrl.label}</span> or view inside Insight OS:
               </p>
-              <div className="flex gap-2 pt-0.5">
+              <div className="flex flex-wrap gap-2 pt-0.5">
                 <a
                   href={pendingLaunchUrl.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => setPendingLaunchUrl(null)}
-                  className="flex-1 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold text-center shadow-lg transition-all flex items-center justify-center gap-1.5"
+                  className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold text-center shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   🚀 Open {pendingLaunchUrl.label} Now
                 </a>
                 <button
-                  onClick={() => setPendingLaunchUrl(null)}
-                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-semibold"
+                  onClick={() => setShowEmbeddedFrame(!showEmbeddedFrame)}
+                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-semibold flex items-center gap-1"
+                >
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" /> {showEmbeddedFrame ? 'Hide Window' : '📺 Embedded OS View'}
+                </button>
+                <button
+                  onClick={() => { setPendingLaunchUrl(null); setShowEmbeddedFrame(false); }}
+                  className="px-2.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 text-xs font-semibold"
                 >
                   Dismiss
                 </button>
               </div>
+
+              {/* Embedded In-App OS Web App Frame Viewer */}
+              {showEmbeddedFrame && (
+                <div className="mt-3 rounded-xl overflow-hidden border border-cyan-500/40 bg-slate-950 flex flex-col h-72 shadow-2xl animate-in zoom-in-95 duration-200">
+                  <div className="flex items-center justify-between p-2 px-3 bg-slate-900 border-b border-slate-800 text-xs">
+                    <span className="font-bold text-cyan-300 flex items-center gap-1.5 truncate">
+                      <Globe className="w-3.5 h-3.5 text-cyan-400" /> {pendingLaunchUrl.label}
+                    </span>
+                    <a
+                      href={pendingLaunchUrl.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-bold flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Open Full Screen Tab
+                    </a>
+                  </div>
+                  <iframe
+                    src={pendingLaunchUrl.url}
+                    className="w-full flex-1 border-0 bg-white"
+                    title={pendingLaunchUrl.label}
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                  />
+                </div>
+              )}
             </div>
           )}
 
