@@ -18,6 +18,10 @@ import { PermissionsGuideModal } from '@/components/permissions-guide-modal';
 import { getDeviceContext } from '@/lib/brain/device-context';
 import { buildRecoveryStrategy } from '@/lib/brain/recovery-engine';
 import { learningEngine } from '@/lib/brain/learning-engine';
+import { computerUseOrchestrator } from '@/lib/agent/computer-use-orchestrator';
+import { continuousSession } from '@/lib/agent/continuous-session';
+import { disambiguationEngine } from '@/lib/entities/disambiguation-engine';
+
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -1114,10 +1118,17 @@ export function VoiceAssistantModal({
         const handled = matchClientInstantAction(spokenTranscript);
         if (handled) return;
 
+        // ── COMPUTER-USE AGENT ORCHESTRATOR ──
+        // Autonomous ReAct Agent Loop: Observe -> Plan -> Execute -> Observe -> Verify -> Recover
+        const orchestratorResult = await computerUseOrchestrator.processCommand(spokenTranscript, speakVoiceResponse);
+        if (orchestratorResult.success) {
+          setActionNotice(`✅ ${orchestratorResult.responseMessage.slice(0, 32)}`);
+          return;
+        }
+
         // ── BRAIN ORCHESTRATOR (Primary Intelligence Path) ──
-        // The Brain uses ReAct reasoning to decide which tool to use,
-        // executes it, and returns a structured response with client actions.
         setActionNotice('🧠 Thinking...');
+
 
         // Record query in history buffer
         setVoiceHistory((prev) => [...prev.slice(-6), { role: 'user', content: spokenTranscript }]);
