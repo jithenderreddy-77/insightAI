@@ -45,8 +45,9 @@ export class DisambiguationEngine {
       '4': 4, '4th': 3, 'fourth': 3, 'four': 3,
     };
 
-    const matchWord = q.replace(/^(the\s+|number\s+)/gi, '').trim();
+    const matchWord = q.replace(/^(the\s+|number\s+)/gi, '').replace(/\s+one$/gi, '').trim();
     const idx = ordinalMap[matchWord];
+
     if (idx !== undefined && idx < candidates.length) {
       return candidates[idx];
     }
