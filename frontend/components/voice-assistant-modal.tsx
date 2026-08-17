@@ -188,23 +188,87 @@ export function VoiceAssistantModal({
 
   // --- PRE-OPENED WINDOW REF & HANDLERS FOR POP-UP BLOCKED FIX ---
   // Browser security blocks window.open() when called asynchronously after STT + LLM pipeline completes.
-  // Fix: Synchronously pre-open a blank tab during initial gesture / command start, then set location.href once URL is known.
+  // Fix: Synchronously pre-open a blank tab during initial trusted user click gesture, then set location.href once URL is known.
   const preOpenedWindowRef = useRef<Window | null>(null);
+  const pendingTabTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const preOpenBlankWindow = useCallback(() => {
     if (typeof window === 'undefined') return;
     try {
-      if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
-        try { preOpenedWindowRef.current.close(); } catch {}
+      // 1. Adopt global pre-opened tab if created by top-bar click handler
+      if ((window as any).__insightPendingTab && !(window as any).__insightPendingTab.closed) {
+        preOpenedWindowRef.current = (window as any).__insightPendingTab;
+        (window as any).__insightPendingTab = null;
+      } else {
+        if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
+          try { preOpenedWindowRef.current.close(); } catch {}
+        }
+        const win = window.open('about:blank', '_blank');
+        preOpenedWindowRef.current = win;
       }
-      const win = window.open('about:blank', '_blank');
-      preOpenedWindowRef.current = win;
+
+      const win = preOpenedWindowRef.current;
+      if (win) {
+        try {
+          win.document.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="utf-8" />
+                <title>Insight AI OS — Processing Command</title>
+                <style>
+                  body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    background: #090d16;
+                    color: #f8fafc;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                  }
+                  .glow-ring {
+                    width: 64px;
+                    height: 64px;
+                    border: 3px solid rgba(6, 182, 212, 0.2);
+                    border-top-color: #06b6d4;
+                    border-right-color: #c084fc;
+                    border-radius: 50%;
+                    animation: spin 1s infinite linear;
+                  }
+                  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                  h2 { margin-top: 24px; font-size: 18px; font-weight: 700; background: linear-gradient(135deg, #38bdf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+                  p { color: #94a3b8; font-size: 13px; margin-top: 6px; }
+                </style>
+              </head>
+              <body>
+                <div class="glow-ring"></div>
+                <h2>Insight AI OS</h2>
+                <p>Listening for your voice command...</p>
+              </body>
+            </html>
+          `);
+        } catch {}
+      }
+
+      if (pendingTabTimeoutRef.current) clearTimeout(pendingTabTimeoutRef.current);
+      pendingTabTimeoutRef.current = setTimeout(() => {
+        if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
+          try { preOpenedWindowRef.current.close(); } catch {}
+        }
+        preOpenedWindowRef.current = null;
+      }, 10000);
     } catch {
       preOpenedWindowRef.current = null;
     }
   }, []);
 
   const cleanupPreOpenedWindow = useCallback(() => {
+    if (pendingTabTimeoutRef.current) {
+      clearTimeout(pendingTabTimeoutRef.current);
+      pendingTabTimeoutRef.current = null;
+    }
     if (preOpenedWindowRef.current && !preOpenedWindowRef.current.closed) {
       try { preOpenedWindowRef.current.close(); } catch {}
     }
@@ -216,6 +280,11 @@ export function VoiceAssistantModal({
     if (typeof window === 'undefined' || !webUrl) {
       cleanupPreOpenedWindow();
       return;
+    }
+
+    if (pendingTabTimeoutRef.current) {
+      clearTimeout(pendingTabTimeoutRef.current);
+      pendingTabTimeoutRef.current = null;
     }
 
     const label = appLabel || webUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 28);
@@ -257,6 +326,8 @@ export function VoiceAssistantModal({
       console.warn('[Pop-up Fix] window.open intercepted by browser pop-up blocker:', e);
     }
   }, [cleanupPreOpenedWindow]);
+
+
 
   const [voiceHistory, setVoiceHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1426,14 +1497,17 @@ export function VoiceAssistantModal({
     if (assistantState === 'listening' || assistantState === 'waiting') {
       shouldRestartRef.current = false;
       try { recognitionRef.current.stop(); } catch {}
+      cleanupPreOpenedWindow();
       setAssistantState('idle');
     } else {
+      preOpenBlankWindow();
       isProcessingRef.current = false;
       shouldRestartRef.current = true;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
       try { recognitionRef.current.start(); } catch {}
     }
   };
+
 
   if (!isOpen) return null;
 
