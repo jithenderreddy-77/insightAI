@@ -8,6 +8,8 @@ import { agentRecoveryEngine } from './agent-recovery-engine';
 import { taskContextManager } from './task-context';
 import { screenStateManager } from './screen-state-manager';
 import { riskEngine } from './risk-engine';
+import { browserBridgeClient } from '../browser-bridge/browser-bridge-client';
+import { browserTabController } from '../browser-bridge/browser-tab-controller';
 
 export interface AgentGoalResult {
   success: boolean;
@@ -38,14 +40,70 @@ export class AgentCore {
     this.setState('PLANNING');
     taskContextManager.pushCommand(userGoal);
 
+    const actionId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const adapter = applicationAdapterRegistry.resolveAdapter(targetApp || 'Insight AI');
-    screenStateManager.updateApp(adapter.id);
 
     if (abortSignal?.aborted) {
       this.setState('IDLE');
       return { success: false, finalMessage: 'Task cancelled by user', actionsExecuted: 0 };
     }
 
+    // ── LEVEL 3 REAL BROWSER EXTENSION EXECUTION PATH ──
+    if (browserBridgeClient.isConnected()) {
+      this.setState('EXECUTING');
+
+      // Target Tab Lock Verification (TargetTabLock + TARGET_MISMATCH check)
+      const targetMatch = browserTabController.verifyTargetMatch(targetApp);
+      if (!targetMatch.isMatch && targetMatch.expectedApp) {
+        // Recovery: Activate locked target tab
+        const tabLock = browserTabController.getLockedTab();
+        if (tabLock) {
+          await browserBridgeClient.lockTargetTab(tabLock.tabId, tabLock.application);
+        }
+      }
+
+      // Execute via Extension Bridge Client
+      const extensionReport = await browserBridgeClient.executeAction(
+        {
+          actionId,
+          type: userGoal.toLowerCase().includes('scroll') ? 'SCROLL' : 'CLICK',
+          targetQuery: userGoal,
+          timeoutMs: 8000,
+        },
+        abortSignal
+      );
+
+      if (extensionReport.success && extensionReport.evidence?.pageState) {
+        // EXTENSION IS SOURCE OF TRUTH: Update ScreenState ONLY from empirical browser evidence
+        screenStateManager.updateFromEmpiricalEvidence(extensionReport.evidence.pageState);
+        this.setState('COMPLETED');
+        return {
+          success: true,
+          finalMessage: extensionReport.message || `Verified action "${userGoal}" on real browser`,
+          actionsExecuted: 1,
+        };
+      } else {
+        // Handle failure/recovery
+        this.setState('RECOVERING');
+        const category = agentRecoveryEngine.classifyFailure(extensionReport.error || 'Extension execution failed');
+        const strategy = agentRecoveryEngine.getStrategy(category, {
+          id: actionId,
+          type: 'CLICK',
+          target: userGoal,
+          timeoutMs: 8000,
+          riskLevel: 'LOW',
+          description: userGoal,
+        });
+
+        if (strategy.userEscalationMessage) {
+          this.setState('WAITING_FOR_USER');
+          return { success: false, finalMessage: strategy.userEscalationMessage, actionsExecuted: 1 };
+        }
+      }
+    }
+
+    // ── FALLBACK EXECUTION PATH (WHEN EXTENSION UNCONNECTED) ──
+    screenStateManager.updateApp(adapter.id);
     this.setState('EXECUTING');
 
     try {
@@ -60,7 +118,7 @@ export class AgentCore {
 
       this.setState('VERIFYING');
       const verification = await actionVerifier.verify({
-        id: 'action_1',
+        id: actionId,
         type: 'OPEN_APP',
         timeoutMs: 3000,
         riskLevel: 'LOW',
@@ -71,7 +129,7 @@ export class AgentCore {
         this.setState('RECOVERING');
         const category = agentRecoveryEngine.classifyFailure(verification.mismatchReason);
         const strategy = agentRecoveryEngine.getStrategy(category, {
-          id: 'action_1',
+          id: actionId,
           type: 'OPEN_APP',
           target: userGoal,
           timeoutMs: 3000,
@@ -87,7 +145,7 @@ export class AgentCore {
 
       this.setState('COMPLETED');
       screenStateManager.setLastSuccessfulAction({
-        id: `act_${Date.now()}`,
+        id: actionId,
         type: 'OPEN_APP',
         target: userGoal,
         timeoutMs: 3000,

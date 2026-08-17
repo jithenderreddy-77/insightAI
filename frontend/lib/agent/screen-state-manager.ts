@@ -80,6 +80,36 @@ class ScreenStateManager {
     this.notifyListeners();
   }
 
+  /**
+   * Update ScreenState ONLY from empirical browser extension evidence (Extension as Source of Truth).
+   */
+  public updateFromEmpiricalEvidence(evidence: {
+    url?: string;
+    title?: string;
+    application?: string;
+    visibleText?: string;
+    scrollPosition?: { top: number; total: number };
+    loadingState?: string;
+    loginState?: string;
+    captchaState?: string;
+    timestamp?: number;
+  }) {
+    if (!evidence) return;
+    if (evidence.application) this.currentScreenState.application = evidence.application;
+    if (evidence.url) this.currentScreenState.url = evidence.url;
+    if (evidence.title) this.currentScreenState.pageTitle = evidence.title;
+    this.currentScreenState.timestamp = evidence.timestamp || Date.now();
+
+    this.pushGraphNode({
+      id: `node_evidence_${Date.now()}`,
+      application: this.currentScreenState.application || 'Web',
+      page: this.currentScreenState.pageTitle || this.currentScreenState.url,
+      timestamp: this.currentScreenState.timestamp,
+    });
+
+    this.notifyListeners();
+  }
+
   public setSelectedEntity(entity: UIEntity | undefined) {
     this.currentScreenState.selectedEntity = entity;
     this.currentScreenState.timestamp = Date.now();

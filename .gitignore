@@ -51,3 +51,9 @@ llm_context/
 test_docs
 
 .swc
+
+# extension & e2e builds
+browser-extension/dist/
+frontend/test-results/
+frontend/playwright-report/
+
