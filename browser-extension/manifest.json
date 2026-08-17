@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Insight AI Companion Extension",
+  "version": "1.0.0",
+  "description": "Real browser computer-use automation companion extension for Insight AI Voice Assistant",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://insight-ai-frontend-kappa.vercel.app/*",
+      "http://localhost/*",
+      "http://127.0.0.1/*"
+    ]
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/content-script.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

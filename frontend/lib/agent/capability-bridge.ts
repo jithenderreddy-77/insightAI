@@ -2,6 +2,7 @@
 // Capability Awareness & Barrier Resilience Bridge (Sandbox, Network, Firewall, CAPTCHA & Authentication)
 
 import { CapabilityStatus } from './agent-types';
+import { browserBridgeClient } from '../browser-bridge/browser-bridge-client';
 
 export interface CapabilityReport {
   status: CapabilityStatus;
@@ -11,9 +12,6 @@ export interface CapabilityReport {
 }
 
 export class CapabilityBridge {
-  private extensionAvailable: boolean = false;
-  private nativeBridgeAvailable: boolean = false;
-
   constructor() {
     this.detectCapabilities();
   }
@@ -21,36 +19,27 @@ export class CapabilityBridge {
   private detectCapabilities() {
     if (typeof window === 'undefined') return;
 
-    // Check if Chrome extension companion is present via custom window event or meta
     try {
-      this.extensionAvailable = !!(window as any).__INSIGHT_EXTENSION_PRESENT__;
-      this.nativeBridgeAvailable = !!(window as any).__INSIGHT_NATIVE_BRIDGE__;
+      browserBridgeClient.performHandshake();
     } catch {}
   }
 
   /**
-   * Evaluate if a requested action capability is natively available or requires bridge/user intervention.
+   * Evaluate if a requested action capability is available via extension bridge or requires installation.
    */
   public evaluateActionCapability(actionType: string, targetApp?: string): CapabilityReport {
-    // 1. Web application deep-linking & local DOM interaction are natively supported
-    if (actionType === 'OPEN_APP' || actionType === 'SEARCH' || actionType === 'SCROLL' || actionType === 'NAVIGATE') {
-      return {
-        status: 'CAPABILITY_AVAILABLE',
-        capabilityName: 'Web & Deep-Link Launcher',
-      };
-    }
+    const connected = browserBridgeClient.isConnected();
 
-    // 2. High-consequence cross-origin DOM actions (filling external forms in tab B)
-    if (actionType === 'TYPE' || actionType === 'CLICK') {
-      if (this.extensionAvailable || this.nativeBridgeAvailable) {
+    if (actionType === 'TYPE' || actionType === 'CLICK' || actionType === 'SCROLL') {
+      if (connected) {
         return {
           status: 'CAPABILITY_AVAILABLE',
-          capabilityName: 'Companion Extension / Native Agent Bridge',
+          capabilityName: 'Insight AI Companion Chrome Extension (Manifest V3)',
         };
       }
       return {
-        status: 'CAPABILITY_AVAILABLE', // Soft fallback to browser tab navigation & URL params
-        capabilityName: 'DOM Automation Layer',
+        status: 'CAPABILITY_AVAILABLE',
+        capabilityName: 'Web Application Launcher',
       };
     }
 
