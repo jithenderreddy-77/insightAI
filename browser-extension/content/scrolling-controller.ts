@@ -47,6 +47,27 @@ export class ContentScrollingController {
     }
     return { found: false, count: maxScrolls };
   }
+
+  /**
+   * Scroll a specific element into view by CSS selector.
+   */
+  public scrollToElement(selector: string): { success: boolean; selector: string } {
+    if (typeof document === 'undefined') {
+      return { success: false, selector };
+    }
+
+    try {
+      const el = document.querySelector(selector);
+      if (!el) {
+        return { success: false, selector };
+      }
+
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return { success: true, selector };
+    } catch {
+      return { success: false, selector };
+    }
+  }
 }
 
 export const contentScrollingController = new ContentScrollingController();

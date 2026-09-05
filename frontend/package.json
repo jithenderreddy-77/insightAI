@@ -57,6 +57,7 @@
     "formidable": "^3.5.2",
     "geist": "latest",
     "input-otp": "1.4.1",
+    "jose": "^4.15.9",
     "jszip": "^3.10.1",
     "lucide-react": "^0.454.0",
     "mermaid": "^11.16.0",

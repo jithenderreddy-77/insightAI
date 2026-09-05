@@ -47,6 +47,17 @@ class ContentScriptController {
       return;
     }
 
+    if (message.type === 'GET_DOM_SNAPSHOT') {
+      const snapshot = contentDomPerception.getAccessibilitySnapshot();
+      sendResponse({
+        success: true,
+        snapshot,
+        pageState: pageStateObserver.getPageState(),
+        elementCount: snapshot.length,
+      });
+      return;
+    }
+
     sendResponse({ success: false, error: 'Unknown Action Type' });
   }
 

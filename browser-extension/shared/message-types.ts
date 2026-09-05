@@ -10,7 +10,8 @@ export type BridgeMessageType =
   | 'INSIGHT_ACTION_STATUS'
   | 'INSIGHT_PERCEIVE_PAGE'
   | 'INSIGHT_GET_PAGE_STATE'
-  | 'INSIGHT_CANCEL_ACTION';
+  | 'INSIGHT_CANCEL_ACTION'
+  | 'INSIGHT_GET_DOM_SNAPSHOT';
 
 export type ExtensionActionLifecycle =
   | 'ACTION_REQUESTED'
@@ -46,7 +47,7 @@ export interface ExtensionPageState {
 
 export interface ExtensionActionPayload {
   actionId: string;
-  type: 'CLICK' | 'TYPE' | 'SCROLL' | 'SELECT' | 'PRESS_KEY' | 'NAVIGATE' | 'GO_BACK';
+  type: 'CLICK' | 'TYPE' | 'SCROLL' | 'SELECT' | 'PRESS_KEY' | 'NAVIGATE' | 'GO_BACK' | 'SCROLL_TO_ELEMENT' | 'FILL_FORM';
   targetQuery?: string;
   value?: string;
   timeoutMs: number;

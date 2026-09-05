@@ -27,3 +27,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .cache/
+
+# PII encrypted profile (NEVER COMMIT)
+/data/
+pii-profile.enc.json
