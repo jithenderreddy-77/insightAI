@@ -43,11 +43,11 @@ const COLORS = new Set([
 // ─────────────────────────────────────────────────────────
 
 const ORDINAL_MAP: Record<string, number> = {
-  'first': 1, '1st': 1, 'one': 1,
-  'second': 2, '2nd': 2, 'two': 2,
-  'third': 3, '3rd': 3, 'three': 3,
-  'fourth': 4, '4th': 4, 'four': 4,
-  'fifth': 5, '5th': 5, 'five': 5,
+  'first': 1, '1st': 1,
+  'second': 2, '2nd': 2,
+  'third': 3, '3rd': 3,
+  'fourth': 4, '4th': 4,
+  'fifth': 5, '5th': 5,
   'sixth': 6, '6th': 6, 'last': -1,
 };
 
@@ -114,9 +114,10 @@ function parseDescription(description: string): ParsedProductDescription {
   for (const word of words) {
     if (COLORS.has(word)) {
       result.color = word;
-    } else if (ORDINAL_MAP[word] !== undefined) {
+    } else if (ORDINAL_MAP[word] !== undefined && result.ordinal === undefined) {
+      // Only use the FIRST ordinal found ("the second one" → ordinal=2, not 1)
       result.ordinal = ORDINAL_MAP[word];
-    } else if (['the', 'a', 'an', 'one', 'that', 'this', 'select', 'pick', 'choose', 'get'].includes(word)) {
+    } else if (['the', 'a', 'an', 'one', 'that', 'this', 'select', 'pick', 'choose', 'get', 'item', 'product', 'result', 'option'].includes(word)) {
       // Skip filler words
     } else {
       result.keywords.push(word);

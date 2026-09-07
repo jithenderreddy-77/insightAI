@@ -25,13 +25,16 @@ export type ActionType =
   | 'CLICK'
   | 'TYPE'
   | 'SCROLL'
+  | 'SCROLL_TO_ELEMENT'
   | 'PRESS_KEY'
   | 'SEARCH'
   | 'SELECT'
   | 'GO_BACK'
   | 'SHARE'
   | 'WAIT'
-  | 'ASK_USER';
+  | 'ASK_USER'
+  | 'PURCHASE'
+  | 'FILL_FORM';
 
 export interface ExpectedState {
   urlPattern?: string;

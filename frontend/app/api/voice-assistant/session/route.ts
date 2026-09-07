@@ -23,8 +23,19 @@ import { sessionStateManager } from '@/lib/agent/session-state';
 // ─────────────────────────────────────────────────────────
 
 export async function GET(req: Request) {
-  // 1. Authenticate
-  const auth = await authenticateRequest(req);
+  // 1. Authenticate — try Authorization header first, then ?token= query param (EventSource compat)
+  let auth = await authenticateRequest(req);
+
+  if (!auth.valid) {
+    // EventSource can't send headers, so accept token as query param
+    const url = new URL(req.url);
+    const queryToken = url.searchParams.get('token');
+    if (queryToken) {
+      const { verifySessionToken } = await import('@/lib/auth/session-jwt');
+      auth = await verifySessionToken(queryToken);
+    }
+  }
+
   if (!auth.valid || !auth.sessionId) {
     return NextResponse.json(
       { error: auth.error || 'Unauthorized' },

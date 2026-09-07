@@ -229,6 +229,15 @@ export function VoiceAssistantModal({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUnlockedRef = useRef<boolean>(false);
 
+  // --- SSE PERSISTENT SESSION STATE ---
+  const [sseSessionId, setSseSessionId] = useState<string | null>(null);
+  const [sseToken, setSseToken] = useState<string | null>(null);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [hitlQuestion, setHitlQuestion] = useState<{ questionId: string; question: string; fieldName?: string } | null>(null);
+  const [safetyConfirm, setSafetyConfirm] = useState<{ questionId: string; question: string; buttonText?: string; orderContext?: string } | null>(null);
+  const [sseActionLog, setSseActionLog] = useState<string[]>([]);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
   // --- GET ACTIVE USER FIRST NAME ---
   const getUserFirstName = useCallback((): string => {
     if (typeof window === 'undefined') return 'friend';
@@ -279,7 +288,7 @@ export function VoiceAssistantModal({
     } catch {}
   }, []);
 
-  // --- TEXT-TO-SPEECH (OpenAI HD Voice with Browser SpeechSynthesis Fallback) ---
+  // --- TEXT-TO-SPEECH (Browser-Native SpeechSynthesis — Free, No API Cost) ---
   const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
     unlockMobileAudio();
 
@@ -294,78 +303,33 @@ export function VoiceAssistantModal({
     setAssistantState('speaking');
     setSpokenText(text);
 
-    // Try OpenAI HD TTS API first for realistic Siri/Alexa human voice
-    const fetchOpenAITTS = async (): Promise<boolean> => {
-      try {
-        const res = await fetch('/api/voice-assistant/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voice: 'nova' }),
-        });
+    // Browser-native SpeechSynthesis (free, zero API cost)
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      if (onComplete) onComplete();
+      restartContinuousListening();
+      return;
+    }
 
-        if (res.ok) {
-          const blob = await res.blob();
-          const audioUrl = URL.createObjectURL(blob);
-          const audio = new Audio(audioUrl);
-          audioRef.current = audio;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.15;
+    utterance.pitch = 1.0;
 
-          audio.onended = () => {
-            URL.revokeObjectURL(audioUrl);
-            audioRef.current = null;
-            if (onComplete) onComplete();
-            restartContinuousListening();
-          };
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find(
+      (v) => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Siri') || v.name.includes('Samantha'))
+    ) || voices.find((v) => v.lang.startsWith('en'));
+    if (preferredVoice) utterance.voice = preferredVoice;
 
-          audio.onerror = () => {
-            URL.revokeObjectURL(audioUrl);
-            audioRef.current = null;
-            fallbackWebSpeech(text, onComplete);
-          };
-
-          await audio.play();
-          return true;
-        }
-      } catch (err) {
-        console.log('OpenAI TTS unavailable, using browser speech fallback:', err);
-      }
-      return false;
+    utterance.onend = () => {
+      if (onComplete) onComplete();
+      restartContinuousListening();
+    };
+    utterance.onerror = () => {
+      if (onComplete) onComplete();
+      restartContinuousListening();
     };
 
-    // Fallback to browser SpeechSynthesis API
-    const fallbackWebSpeech = (speechText: string, cb?: () => void) => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        if (cb) cb();
-        restartContinuousListening();
-        return;
-      }
-
-      const utterance = new SpeechSynthesisUtterance(speechText);
-      utterance.rate = 1.15;
-      utterance.pitch = 1.0;
-
-      const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(
-        (v) => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Siri') || v.name.includes('Samantha'))
-      ) || voices.find((v) => v.lang.startsWith('en'));
-      if (preferredVoice) utterance.voice = preferredVoice;
-
-      utterance.onend = () => {
-        if (cb) cb();
-        restartContinuousListening();
-      };
-      utterance.onerror = () => {
-        if (cb) cb();
-        restartContinuousListening();
-      };
-
-      window.speechSynthesis.speak(utterance);
-    };
-
-    fetchOpenAITTS().then((success) => {
-      if (!success) {
-        fallbackWebSpeech(text, onComplete);
-      }
-    });
+    window.speechSynthesis.speak(utterance);
   }, [unlockMobileAudio]);
 
   // --- RESTART CONTINUOUS LISTENING ---
@@ -381,6 +345,171 @@ export function VoiceAssistantModal({
       if (!shouldRestartRef.current) return;
       try { recognitionRef.current.start(); } catch {}
     }, 200);
+  }, []);
+
+  // --- SSE PERSISTENT SESSION MANAGEMENT ---
+  const startSSESession = useCallback(async () => {
+    try {
+      // 1. Create session and get JWT
+      const res = await fetch('/api/voice-assistant/session', {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        console.warn('[SSE] Failed to create session:', res.status);
+        return;
+      }
+      const data = await res.json();
+      const { sessionId, token } = data;
+      setSseSessionId(sessionId);
+      setSseToken(token);
+
+      // 2. Open EventSource for SSE stream
+      // Note: EventSource doesn't support custom headers, so we pass token as query param
+      const es = new EventSource(`/api/voice-assistant/session?sessionId=${sessionId}&token=${token}`);
+      eventSourceRef.current = es;
+
+      es.addEventListener('session:started', (e: MessageEvent) => {
+        setSseConnected(true);
+        setSseActionLog(prev => [...prev.slice(-9), '🟢 Session connected']);
+      });
+
+      es.addEventListener('action:log', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setSseActionLog(prev => [...prev.slice(-9), event.data?.message || 'Action logged']);
+        } catch {}
+      });
+
+      es.addEventListener('action:executing', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setActionNotice(`⚡ ${event.data?.action || event.data?.message || 'Executing...'}`);
+        } catch {}
+      });
+
+      es.addEventListener('action:completed', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setActionNotice(`✅ ${event.data?.message || 'Done'}`);
+        } catch {}
+      });
+
+      es.addEventListener('action:failed', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setActionNotice(`❌ ${event.data?.error || 'Failed'}`);
+        } catch {}
+      });
+
+      es.addEventListener('hitl:prompt', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setHitlQuestion({
+            questionId: event.data.questionId,
+            question: event.data.question,
+            fieldName: event.data.fieldName,
+          });
+          // Speak the question
+          speakVoiceResponse(event.data.question);
+        } catch {}
+      });
+
+      es.addEventListener('safety:confirm_purchase', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          setSafetyConfirm({
+            questionId: event.data.questionId,
+            question: event.data.confirmationQuestion,
+            buttonText: event.data.buttonText,
+            orderContext: event.data.orderContext,
+          });
+          // Speak the confirmation question
+          speakVoiceResponse(event.data.confirmationQuestion);
+        } catch {}
+      });
+
+      es.addEventListener('hitl:resolved', () => {
+        setHitlQuestion(null);
+      });
+
+      es.addEventListener('task:done', (e: MessageEvent) => {
+        try {
+          const event = JSON.parse(e.data);
+          const msg = event.data?.message || 'Task completed!';
+          setActionNotice(`🎉 ${msg}`);
+          speakVoiceResponse(msg);
+        } catch {}
+      });
+
+      es.addEventListener('error', () => {
+        // SSE connection error — mark as disconnected, will auto-reconnect
+        console.warn('[SSE] Connection error, browser will auto-reconnect');
+      });
+
+      es.onerror = () => {
+        setSseConnected(false);
+      };
+
+    } catch (err) {
+      console.error('[SSE] Session creation error:', err);
+    }
+  }, [speakVoiceResponse]);
+
+  const sendHITLAnswer = useCallback(async (questionId: string, answer: string) => {
+    if (!sseSessionId || !sseToken) return;
+
+    try {
+      await fetch('/api/voice-assistant/session/command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sseToken}`,
+        },
+        body: JSON.stringify({
+          sessionId: sseSessionId,
+          type: 'hitl_answer',
+          questionId,
+          answer,
+        }),
+      });
+      setHitlQuestion(null);
+      setSafetyConfirm(null);
+    } catch (err) {
+      console.error('[SSE] HITL answer error:', err);
+    }
+  }, [sseSessionId, sseToken]);
+
+  const sendSSECommand = useCallback(async (command: string) => {
+    if (!sseSessionId || !sseToken) return false;
+
+    try {
+      const res = await fetch('/api/voice-assistant/session/command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sseToken}`,
+        },
+        body: JSON.stringify({
+          sessionId: sseSessionId,
+          type: 'voice_command',
+          command,
+        }),
+      });
+      return res.ok;
+    } catch (err) {
+      console.error('[SSE] Command send error:', err);
+      return false;
+    }
+  }, [sseSessionId, sseToken]);
+
+  // Clean up SSE connection on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
   }, []);
 
   // --- 0-TOKEN CLIENT-SIDE FAST-PATH AUTOMATION ---
