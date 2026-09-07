@@ -15,6 +15,51 @@ class ContentScriptController {
   }
 
   private initListeners() {
+    // Expose extension presence to host web page
+    try {
+      const script = document.createElement('script');
+      script.textContent = 'window.__INSIGHT_EXTENSION_PRESENT__ = true; window.dispatchEvent(new CustomEvent("INSIGHT_EXTENSION_READY"));';
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    } catch {}
+
+    // Listen for window postMessage from Insight AI web application
+    if (typeof window !== 'undefined') {
+      window.addEventListener('message', (event) => {
+        if (event.source !== window || !event.data || typeof event.data !== 'object') return;
+        const { type, nonce, payload } = event.data;
+
+        if (type === 'INSIGHT_HANDSHAKE_REQUEST') {
+          window.postMessage({ type: 'INSIGHT_HANDSHAKE_RESPONSE', nonce, version: '1.0.0' }, '*');
+          return;
+        }
+
+        if (
+          type === 'INSIGHT_EXECUTE_ACTION' ||
+          type === 'INSIGHT_OPEN_TAB' ||
+          type === 'INSIGHT_GET_DOM_SNAPSHOT' ||
+          type === 'INSIGHT_DISCOVER_TABS' ||
+          type === 'INSIGHT_SELECT_TARGET_TAB'
+        ) {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage(
+              {
+                source: 'INSIGHT_WEB_APP',
+                type,
+                nonce,
+                origin: window.location.origin,
+                timestamp: Date.now(),
+                payload,
+              },
+              (response: any) => {
+                window.postMessage({ type: `${type}_RESPONSE`, nonce, response }, '*');
+              }
+            );
+          }
+        }
+      });
+    }
+
     if (typeof chrome === 'undefined' || !chrome.runtime) return;
 
     chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {

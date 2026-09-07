@@ -90,24 +90,12 @@ export class InPageActionExecutor {
       message: `In-page action: "${command}"`,
     });
 
-    // 1. Request fresh DOM snapshot
-    const selectorMap = await this.requestDOMSnapshot(sessionId);
-    if (!selectorMap || Object.keys(selectorMap).length === 0) {
-      return {
-        success: false,
-        message: 'Could not get DOM snapshot from the current page. Is the extension connected?',
-        actionTaken: 'none',
-      };
-    }
-
     // Check abort
     if (abortSignal?.aborted) {
       return { success: false, message: 'Action cancelled', actionTaken: 'none' };
     }
 
-    // 2. Determine action type and execute
-
-    // ── GO BACK ──
+    // ── GO BACK (Independent of selectorMap) ──
     if (GO_BACK_PATTERNS.test(q)) {
       return this.executeViaExtension(sessionId, {
         actionId: this.generateActionId(),
@@ -116,7 +104,7 @@ export class InPageActionExecutor {
       }, 'go_back');
     }
 
-    // ── SCROLL ──
+    // ── SCROLL (Independent of selectorMap) ──
     if (SCROLL_DOWN_PATTERNS.test(q)) {
       return this.executeViaExtension(sessionId, {
         actionId: this.generateActionId(),
@@ -149,6 +137,18 @@ export class InPageActionExecutor {
         timeoutMs: 3000,
       }, 'scroll_bottom');
     }
+
+    // 1. Request fresh DOM snapshot for element-targeting actions
+    const selectorMap = await this.requestDOMSnapshot(sessionId);
+    if (!selectorMap || Object.keys(selectorMap).length === 0) {
+      return {
+        success: false,
+        message: 'Could not get page elements from the current tab. Please ensure the target website is open and the extension is loaded.',
+        actionTaken: 'none',
+      };
+    }
+
+    // 2. Determine element-targeting action type and execute
 
     // Scroll to a specific element
     const scrollToMatch = q.match(SCROLL_TO_ELEMENT_PATTERNS);
@@ -451,17 +451,12 @@ The index MUST be one of: ${validIndices}`;
     if (!browserBridgeClient.isConnected()) return null;
 
     try {
-      // Request snapshot via extension bridge
-      const report = await browserBridgeClient.executeAction({
-        actionId: this.generateActionId(),
-        type: 'CLICK', // Placeholder — the actual snapshot is triggered separately
-        targetQuery: '__SNAPSHOT_REQUEST__',
-        timeoutMs: 3000,
-      });
+      const snapshot = await browserBridgeClient.getDOMSnapshot();
+      if (snapshot && Object.keys(snapshot).length > 0) {
+        sessionStateManager.updateSelectorMap(sessionId, snapshot as SelectorMap);
+        return snapshot as SelectorMap;
+      }
 
-      // For now, the snapshot comes via the extension's GET_DOM_SNAPSHOT message
-      // This will be wired once we connect the bridge to support the snapshot message type
-      // Returning the session's existing selector map as fallback
       const session = sessionStateManager.getSession(sessionId);
       return session?.selectorMap || null;
     } catch {

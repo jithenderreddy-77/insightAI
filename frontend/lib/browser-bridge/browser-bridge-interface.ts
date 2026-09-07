@@ -22,6 +22,7 @@ export interface BrowserBridgeInterface {
   lockTargetTab(tabId: number, appName: string): Promise<TargetTabLock | null>;
   openTab(url: string, appName?: string): Promise<TargetTabLock | null>;
   getActiveTargetTab(): TargetTabLock | null;
+  getDOMSnapshot(): Promise<Record<number, any> | null>;
   executeAction(payload: ExtensionActionPayload, signal?: AbortSignal): Promise<ExtensionActionStatusReport>;
   cancelAction(actionId: string): Promise<boolean>;
 }

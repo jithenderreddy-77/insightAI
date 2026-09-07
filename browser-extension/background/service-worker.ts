@@ -104,6 +104,17 @@ class ExtensionServiceWorker {
         );
         break;
 
+      case 'INSIGHT_GET_DOM_SNAPSHOT':
+        const snapshotResult = await this.getSnapshotFromTargetTab();
+        sendResponse(
+          ProtocolSecurity.createEnvelope(
+            'INSIGHT_EXTENSION_SERVICE_WORKER',
+            'INSIGHT_ACTION_STATUS',
+            snapshotResult
+          )
+        );
+        break;
+
       case 'INSIGHT_CANCEL_ACTION':
         const cancelResult = await this.cancelActiveAction(envelope.payload.actionId);
         sendResponse(cancelResult);
@@ -160,7 +171,51 @@ class ExtensionServiceWorker {
     });
   }
 
+  private async autoLockActiveTab(): Promise<LockedTargetTab | null> {
+    if (typeof chrome === 'undefined' || !chrome.tabs) return null;
+    return new Promise((resolve) => {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs: any[]) => {
+        const target = (tabs && tabs[0]) || null;
+        if (target && target.id) {
+          this.activeTargetTab = {
+            tabId: target.id,
+            windowId: target.windowId,
+            url: target.url || '',
+            application: this.detectAppNameFromUrl(target.url || ''),
+            lockedAt: Date.now(),
+          };
+          resolve(this.activeTargetTab);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  private async getSnapshotFromTargetTab(): Promise<any> {
+    if (!this.activeTargetTab) {
+      await this.autoLockActiveTab();
+    }
+    if (!this.activeTargetTab || typeof chrome === 'undefined' || !chrome.tabs) {
+      return { success: false, error: 'No Target Tab Locked' };
+    }
+
+    const tabId = this.activeTargetTab.tabId;
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: 'GET_DOM_SNAPSHOT' }, (response: any) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(response || { success: false, error: 'No Response from Content Script' });
+      });
+    });
+  }
+
   private async relayActionToTargetTab(payload: ExtensionActionPayload): Promise<any> {
+    if (!this.activeTargetTab) {
+      await this.autoLockActiveTab();
+    }
     if (!this.activeTargetTab || typeof chrome === 'undefined' || !chrome.tabs) {
       return { success: false, error: 'No Target Tab Locked' };
     }

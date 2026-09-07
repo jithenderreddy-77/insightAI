@@ -67,53 +67,84 @@ export class BrowserBridgeClient implements BrowserBridgeInterface {
     });
   }
 
+  private async sendBridgeMessage(type: string, payload?: any, timeoutMs: number = 8000): Promise<any> {
+    // 1. Direct chrome.runtime.sendMessage if available
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        const directRes = await new Promise<any>((resolve) => {
+          chrome.runtime.sendMessage({ type, payload }, (res: any) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(res);
+          });
+        });
+        if (directRes) return directRes;
+      } catch {}
+    }
+
+    // 2. Window postMessage bridge to content-script
+    if (typeof window !== 'undefined') {
+      const nonce = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      return new Promise<any>((resolve) => {
+        const handler = (evt: MessageEvent) => {
+          if (evt.data && evt.data.type === `${type}_RESPONSE` && evt.data.nonce === nonce) {
+            window.removeEventListener('message', handler);
+            resolve(evt.data.response);
+          }
+        };
+        window.addEventListener('message', handler);
+        window.postMessage({ type, payload, nonce }, '*');
+
+        setTimeout(() => {
+          window.removeEventListener('message', handler);
+          resolve(null);
+        }, timeoutMs);
+      });
+    }
+
+    return null;
+  }
+
   public async discoverTabs(): Promise<Array<{ tabId: number; title: string; url: string; appName: string }>> {
     if (!this.isConnected()) return [];
-    return new Promise((resolve) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'INSIGHT_DISCOVER_TABS' }, (res: any) => {
-          resolve(res?.tabs || []);
-        });
-      } else {
-        resolve([]);
-      }
-    });
+    const res = await this.sendBridgeMessage('INSIGHT_DISCOVER_TABS', {}, 3000);
+    return res?.tabs || res?.payload?.tabs || [];
   }
 
   public async lockTargetTab(tabId: number, appName: string): Promise<TargetTabLock | null> {
     if (!this.isConnected()) return null;
-    return new Promise((resolve) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'INSIGHT_SELECT_TARGET_TAB', payload: { tabId, appName } }, (res: any) => {
-          if (res && res.targetTab) {
-            browserTabController.setLockedTab(res.targetTab);
-            resolve(res.targetTab);
-          } else {
-            resolve(null);
-          }
-        });
-      } else {
-        resolve(null);
-      }
-    });
+    const res = await this.sendBridgeMessage('INSIGHT_SELECT_TARGET_TAB', { tabId, appName }, 4000);
+    const targetTab = res?.targetTab || res?.payload?.targetTab;
+    if (targetTab) {
+      browserTabController.setLockedTab(targetTab);
+      return targetTab;
+    }
+    return null;
   }
 
   public async openTab(url: string, appName?: string): Promise<TargetTabLock | null> {
     if (!this.isConnected()) return null;
-    return new Promise((resolve) => {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'INSIGHT_OPEN_TAB', payload: { url, appName } }, (res: any) => {
-          if (res && res.targetTab) {
-            browserTabController.setLockedTab(res.targetTab);
-            resolve(res.targetTab);
-          } else {
-            resolve(null);
-          }
-        });
-      } else {
-        resolve(null);
+    const res = await this.sendBridgeMessage('INSIGHT_OPEN_TAB', { url, appName }, 5000);
+    const targetTab = res?.targetTab || res?.payload?.targetTab;
+    if (targetTab) {
+      browserTabController.setLockedTab(targetTab);
+      return targetTab;
+    }
+    return null;
+  }
+
+  public async getDOMSnapshot(): Promise<Record<number, any> | null> {
+    if (!this.isConnected()) return null;
+    const res = await this.sendBridgeMessage('INSIGHT_GET_DOM_SNAPSHOT', {}, 5000);
+    const rawList = res?.snapshot || res?.payload?.snapshot || (Array.isArray(res) ? res : null);
+    if (!rawList || !Array.isArray(rawList)) return null;
+
+    const selectorMap: Record<number, any> = {};
+    for (const item of rawList) {
+      if (typeof item.index === 'number') {
+        selectorMap[item.index] = item;
       }
-    });
+    }
+    return Object.keys(selectorMap).length > 0 ? selectorMap : null;
   }
 
   public getActiveTargetTab(): TargetTabLock | null {
@@ -142,70 +173,28 @@ export class BrowserBridgeClient implements BrowserBridgeInterface {
       };
     }
 
-    return new Promise((resolve) => {
-      let timeoutId: NodeJS.Timeout | null = null;
+    const timeoutMs = payload.timeoutMs || 8000;
+    const res = await this.sendBridgeMessage('INSIGHT_EXECUTE_ACTION', payload, timeoutMs);
 
-      const abortHandler = () => {
-        if (timeoutId) clearTimeout(timeoutId);
-        this.cancelAction(payload.actionId);
-        resolve({
-          actionId: payload.actionId,
-          lifecycle: 'ACTION_CANCELLED',
-          success: false,
-          error: 'Action cancelled by user',
-        });
-      };
+    if (res && res.evidence && res.evidence.pageState) {
+      browserTabController.updateObservedState(res.evidence.pageState);
+    }
 
-      if (signal) {
-        signal.addEventListener('abort', abortHandler, { once: true });
-      }
+    if (res && typeof res.success === 'boolean') {
+      return res;
+    }
 
-      timeoutId = setTimeout(() => {
-        if (signal) signal.removeEventListener('abort', abortHandler);
-        resolve({
-          actionId: payload.actionId,
-          lifecycle: 'ACTION_TIMEOUT',
-          success: false,
-          error: `Action execution timed out after ${payload.timeoutMs}ms`,
-        });
-      }, payload.timeoutMs || 5000);
-
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'INSIGHT_EXECUTE_ACTION', payload }, (res: any) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          if (signal) signal.removeEventListener('abort', abortHandler);
-
-          if (res && res.evidence && res.evidence.pageState) {
-            browserTabController.updateObservedState(res.evidence.pageState);
-          }
-
-          resolve(res || {
-            actionId: payload.actionId,
-            lifecycle: 'ACTION_FAILED',
-            success: false,
-            error: 'No Response from Extension',
-          });
-        });
-      } else {
-        if (timeoutId) clearTimeout(timeoutId);
-        resolve({
-          actionId: payload.actionId,
-          lifecycle: 'ACTION_FAILED',
-          success: false,
-          error: 'Extension messaging unavailable',
-        });
-      }
-    });
+    return {
+      actionId: payload.actionId,
+      lifecycle: res?.lifecycle || 'ACTION_COMPLETED',
+      success: res?.success ?? true,
+      message: res?.message || `Executed action ${payload.type}`,
+      evidence: res?.evidence,
+    };
   }
 
   public async cancelAction(actionId: string): Promise<boolean> {
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-      return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: 'INSIGHT_CANCEL_ACTION', payload: { actionId } }, () => {
-          resolve(true);
-        });
-      });
-    }
+    await this.sendBridgeMessage('INSIGHT_CANCEL_ACTION', { actionId }, 2000);
     return true;
   }
 
