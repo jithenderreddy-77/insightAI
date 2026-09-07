@@ -38,6 +38,36 @@ class ExtensionServiceWorker {
         return true;
       });
     }
+
+    // WebNavigation listener: Sweep disturbances (cookie banners, overlays) as soon as target tab finishes loading
+    if (typeof chrome !== 'undefined' && chrome.webNavigation && chrome.webNavigation.onCompleted) {
+      chrome.webNavigation.onCompleted.addListener((details: any) => {
+        if (details.frameId === 0 && this.activeTargetTab && this.activeTargetTab.tabId === details.tabId) {
+          try {
+            chrome.tabs.sendMessage(details.tabId, { type: 'SWEEP_DISTURBANCES' }, () => {
+              // Ignore if content script isn't listening yet
+              if (chrome.runtime?.lastError) {}
+            });
+          } catch {}
+        }
+      });
+    }
+  }
+
+  private requestPowerKeepAwake() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.power && chrome.power.requestKeepAwake) {
+        chrome.power.requestKeepAwake('display');
+      }
+    } catch {}
+  }
+
+  private releasePowerKeepAwake() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.power && chrome.power.releaseKeepAwake) {
+        chrome.power.releaseKeepAwake();
+      }
+    } catch {}
   }
 
   private async handleWebMessage(
@@ -213,6 +243,7 @@ class ExtensionServiceWorker {
   }
 
   private async relayActionToTargetTab(payload: ExtensionActionPayload): Promise<any> {
+    this.requestPowerKeepAwake();
     if (!this.activeTargetTab) {
       await this.autoLockActiveTab();
     }

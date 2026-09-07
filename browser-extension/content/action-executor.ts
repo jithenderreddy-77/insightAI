@@ -20,6 +20,9 @@ export class ContentActionExecutor {
     const startTime = Date.now();
     const actionId = payload.actionId;
 
+    // Proactively clear disturbance overlays (cookie banners, delivery modals) before any action
+    this.dismissDisturbances();
+
     try {
       // ── GO_BACK ──
       if (payload.type === 'GO_BACK') {
@@ -165,8 +168,41 @@ export class ContentActionExecutor {
 
       // ── CLICK ──
       if (payload.type === 'CLICK' && targetElem) {
-        targetElem.focus();
-        targetElem.click();
+        // Clear any newly surfaced disturbances
+        this.dismissDisturbances();
+
+        // Ensure element is centered in the viewport
+        try {
+          targetElem.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+        } catch {
+          targetElem.scrollIntoView(true);
+        }
+
+        // Bypass potential overlay blocking elementFromPoint
+        try {
+          const rect = targetElem.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const cx = Math.max(0, rect.left + rect.width / 2);
+            const cy = Math.max(0, rect.top + rect.height / 2);
+            const topEl = document.elementFromPoint(cx, cy) as HTMLElement | null;
+            if (topEl && topEl !== targetElem && !targetElem.contains(topEl) && !topEl.contains(targetElem)) {
+              if (topEl.matches?.('.modal-backdrop, .a-popover-modal, .a-modal-scroller, [class*="backdrop" i], [class*="overlay" i]')) {
+                topEl.style.pointerEvents = 'none';
+              }
+            }
+          }
+        } catch {}
+
+        // Complete event sequence: pointerdown -> mousedown -> focus -> pointerup -> mouseup -> click
+        const evtInit: MouseEventInit = { bubbles: true, cancelable: true, view: window };
+        try { targetElem.dispatchEvent(new PointerEvent('pointerdown', evtInit)); } catch {}
+        try { targetElem.dispatchEvent(new MouseEvent('mousedown', evtInit)); } catch {}
+        try { targetElem.focus(); } catch {}
+        try { targetElem.dispatchEvent(new PointerEvent('pointerup', evtInit)); } catch {}
+        try { targetElem.dispatchEvent(new MouseEvent('mouseup', evtInit)); } catch {}
+        try { targetElem.click(); } catch {}
+        try { targetElem.dispatchEvent(new MouseEvent('click', evtInit)); } catch {}
+
         await new Promise((r) => setTimeout(r, 400));
         return {
           actionId,
@@ -297,6 +333,107 @@ export class ContentActionExecutor {
         executionTimeMs: Date.now() - startTime,
       },
     };
+  }
+
+  /**
+   * Automatically detect and dismiss disturbances (cookie banners, location popovers, newsletter dialogs, modal backdrops).
+   * Returns count of disturbances dismissed.
+   */
+  public dismissDisturbances(): number {
+    if (typeof document === 'undefined') return 0;
+    let dismissed = 0;
+
+    // 1. Cookie & Consent banners (Amazon, YouTube, Google, generic CMPs)
+    const consentSelectors = [
+      '#sp-cc-accept',
+      '#sp-cc-accept-button',
+      'input[name="acceptCookie"]',
+      '[data-action="accept-cookies"]',
+      '#onetrust-accept-btn-handler',
+      '#didomi-notice-agree-button',
+      'button#accept-choices',
+      'button[aria-label*="accept all" i]',
+      'button[aria-label*="accept cookie" i]',
+      'button[aria-label*="agree" i]',
+      'button[id*="cookie-accept" i]',
+      'button[id*="accept-cookie" i]',
+      'button[class*="cookie-accept" i]',
+      '.cc-btn.cc-allow',
+      'ytd-consent-bump-v2-lightbox button',
+    ];
+
+    for (const sel of consentSelectors) {
+      try {
+        const btn = document.querySelector(sel) as HTMLElement;
+        if (btn && btn.offsetParent !== null) {
+          btn.click();
+          dismissed++;
+        }
+      } catch {}
+    }
+
+    // 2. Location & Delivery Dialogs (Amazon GLUX, toasters)
+    const locationSelectors = [
+      '#GLUXConfirmClose',
+      '.glow-toaster-button-dismiss',
+      'input[data-action-type="DISMISS"]',
+      'button[name="glowDoneButton"]',
+      '.a-popover-header .a-button-close',
+      '.a-declarative[data-action="a-popover-close"]',
+      '[data-action="a-modal-close"]',
+    ];
+
+    for (const sel of locationSelectors) {
+      try {
+        const btn = document.querySelector(sel) as HTMLElement;
+        if (btn && btn.offsetParent !== null) {
+          btn.click();
+          dismissed++;
+        }
+      } catch {}
+    }
+
+    // 3. Generic modal/popup dismiss buttons
+    const modalCloseSelectors = [
+      'button[aria-label="Close" i]',
+      'button[aria-label="Dismiss" i]',
+      '[aria-label="Close dialog" i]',
+      'button.a-button-close',
+      '[data-dismiss="modal"]',
+      '.modal-close-btn',
+    ];
+
+    for (const sel of modalCloseSelectors) {
+      try {
+        const elements = document.querySelectorAll(sel);
+        elements.forEach((el) => {
+          const btn = el as HTMLElement;
+          const inModal = btn.closest('[role="dialog"], [role="alertdialog"], .modal, .a-popover, .a-modal, [class*="popup" i]');
+          if (inModal && btn.offsetParent !== null) {
+            btn.click();
+            dismissed++;
+          }
+        });
+      } catch {}
+    }
+
+    // 4. Stale high-z-index backdrops blocking pointer events
+    try {
+      const backdrops = document.querySelectorAll('.modal-backdrop, .a-popover-modal, .a-modal-scroller');
+      backdrops.forEach((bd) => {
+        const el = bd as HTMLElement;
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const hasDialog = el.querySelector('[role="dialog"], form, input, button');
+          if (!hasDialog) {
+            el.style.pointerEvents = 'none';
+            dismissed++;
+          }
+        }
+      });
+    } catch {}
+
+    return dismissed;
   }
 }
 

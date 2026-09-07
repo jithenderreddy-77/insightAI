@@ -12,6 +12,7 @@ class ContentScriptController {
   constructor() {
     this.initListeners();
     this.observePageStateChanges();
+    this.startDisturbanceSweeper();
   }
 
   private initListeners() {
@@ -103,7 +104,37 @@ class ContentScriptController {
       return;
     }
 
+    if (message.type === 'SWEEP_DISTURBANCES') {
+      const count = contentActionExecutor.dismissDisturbances();
+      sendResponse({ success: true, count });
+      return;
+    }
+
     sendResponse({ success: false, error: 'Unknown Action Type' });
+  }
+
+  private startDisturbanceSweeper() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    // Run sweep on initial load
+    setTimeout(() => contentActionExecutor.dismissDisturbances(), 500);
+    setTimeout(() => contentActionExecutor.dismissDisturbances(), 1500);
+
+    // Continuous background sweep on DOM mutations (debounced)
+    let debounceTimer: any = null;
+    try {
+      const observer = new MutationObserver(() => {
+        if (debounceTimer) return;
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          contentActionExecutor.dismissDisturbances();
+        }, 800);
+      });
+      observer.observe(document.documentElement || document.body, {
+        childList: true,
+        subtree: true,
+      });
+    } catch {}
   }
 
   private observePageStateChanges() {

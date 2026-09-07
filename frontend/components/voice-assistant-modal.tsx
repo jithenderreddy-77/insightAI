@@ -138,6 +138,81 @@ export function VoiceAssistantModal({
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
   const hasGreetedRef = useRef(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<any>(null);
+  const wakeLockRef = useRef<any>(null);
+
+  // --- AUTOMATED PERMISSIONS & BACKGROUND TAB KEEP-ALIVE ---
+  const acquireKeepAwakePermissions = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+
+    // 1. Proactively request microphone permission and establish active audio stream to prevent Chrome background throttling
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !mediaStreamRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        mediaStreamRef.current = stream;
+
+        // Establish an audio context with an inaudible connection.
+        // Chrome explicitly keeps background tabs awake without CPU/timer throttling when an active media track is running.
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx && !audioContextRef.current) {
+          const ctx = new AudioCtx();
+          audioContextRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const gain = ctx.createGain();
+          gain.gain.value = 0.00001; // inaudible keep-alive signal
+          source.connect(gain);
+          gain.connect(ctx.destination);
+          if (ctx.state === 'suspended') {
+            await ctx.resume();
+          }
+        }
+      }
+    } catch (micErr) {
+      console.warn('[VOICE MODAL] Proactive mic permission error:', micErr);
+    }
+
+    // 2. Request Screen Wake Lock so display/system doesn't sleep during automation
+    try {
+      if ('wakeLock' in navigator && (navigator as any).wakeLock?.request) {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      }
+    } catch (wlErr) {
+      // Wake Lock might be unsupported or rejected; non-blocking
+    }
+  }, []);
+
+  const releaseKeepAwakePermissions = useCallback(() => {
+    // Release Wake Lock
+    try {
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release();
+        wakeLockRef.current = null;
+      }
+    } catch {}
+
+    // Close AudioContext
+    try {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    } catch {}
+
+    // Stop MediaStream tracks
+    try {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
+    } catch {}
+  }, []);
 
   // Initialize orb position (bottom-right)
   useEffect(() => {
@@ -1552,6 +1627,9 @@ export function VoiceAssistantModal({
       setAssistantState('listening');
       setTranscript(''); setSpokenText(''); setActionNotice(null); setCommandLog([]);
 
+      // Proactively acquire microphone permissions & screen wake lock to prevent background tab sleep
+      acquireKeepAwakePermissions();
+
       setTimeout(() => { try { recognitionRef.current.start(); } catch {} }, 200);
 
       // Connect persistent SSE session loop
@@ -1566,9 +1644,23 @@ export function VoiceAssistantModal({
       }
     }
 
+    // Auto-reacquire wake lock on visibility change
+    const handleVisibilityChange = () => {
+      if (isOpen && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        acquireKeepAwakePermissions();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
     return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       if (!isOpen) {
         shouldRestartRef.current = false;
+        releaseKeepAwakePermissions();
         if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
         if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} }
         if (eventSourceRef.current) {
@@ -1582,7 +1674,7 @@ export function VoiceAssistantModal({
         hasGreetedRef.current = false;
       }
     };
-  }, [isOpen, speakVoiceResponse, startSSESession]);
+  }, [isOpen, speakVoiceResponse, startSSESession, acquireKeepAwakePermissions, releaseKeepAwakePermissions]);
 
   const toggleListening = () => {
     if (!recognitionRef.current) return;
