@@ -138,44 +138,21 @@ export function VoiceAssistantModal({
   const isProcessingRef = useRef(false);
   const shouldRestartRef = useRef(false);
   const hasGreetedRef = useRef(false);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<any>(null);
   const wakeLockRef = useRef<any>(null);
 
-  // --- AUTOMATED PERMISSIONS & BACKGROUND TAB KEEP-ALIVE ---
+  // --- AUTOMATED PERMISSIONS & SCREEN KEEP-AWAKE ---
   const acquireKeepAwakePermissions = useCallback(async () => {
     if (typeof window === 'undefined') return;
 
-    // 1. Proactively request microphone permission and establish active audio stream to prevent Chrome background throttling
+    // 1. Proactively prompt for mic permission if needed, then immediately release the hardware track
+    // so SpeechRecognition has 100% exclusive access to the microphone.
     try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !mediaStreamRef.current) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        mediaStreamRef.current = stream;
-
-        // Establish an audio context with an inaudible connection.
-        // Chrome explicitly keeps background tabs awake without CPU/timer throttling when an active media track is running.
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtx && !audioContextRef.current) {
-          const ctx = new AudioCtx();
-          audioContextRef.current = ctx;
-          const source = ctx.createMediaStreamSource(stream);
-          const gain = ctx.createGain();
-          gain.gain.value = 0.00001; // inaudible keep-alive signal
-          source.connect(gain);
-          gain.connect(ctx.destination);
-          if (ctx.state === 'suspended') {
-            await ctx.resume();
-          }
-        }
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((track) => track.stop());
       }
     } catch (micErr) {
-      console.warn('[VOICE MODAL] Proactive mic permission error:', micErr);
+      console.warn('[VOICE MODAL] Mic permission check:', micErr);
     }
 
     // 2. Request Screen Wake Lock so display/system doesn't sleep during automation
@@ -189,27 +166,10 @@ export function VoiceAssistantModal({
   }, []);
 
   const releaseKeepAwakePermissions = useCallback(() => {
-    // Release Wake Lock
     try {
       if (wakeLockRef.current) {
         wakeLockRef.current.release();
         wakeLockRef.current = null;
-      }
-    } catch {}
-
-    // Close AudioContext
-    try {
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-    } catch {}
-
-    // Stop MediaStream tracks
-    try {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
       }
     } catch {}
   }, []);
@@ -386,6 +346,31 @@ export function VoiceAssistantModal({
     } catch {}
   }, []);
 
+  // --- RESTART CONTINUOUS LISTENING ---
+  const restartContinuousListening = useCallback(() => {
+    if (!recognitionRef.current) return;
+    isProcessingRef.current = false;
+    shouldRestartRef.current = true;
+    setAssistantState('listening');
+    setTranscript('');
+    setSpokenText('');
+
+    setTimeout(() => {
+      if (!shouldRestartRef.current || !recognitionRef.current) return;
+      try {
+        recognitionRef.current.start();
+      } catch (err: any) {
+        if (err.name !== 'InvalidStateError') {
+          setTimeout(() => {
+            if (shouldRestartRef.current && recognitionRef.current) {
+              try { recognitionRef.current.start(); } catch {}
+            }
+          }, 300);
+        }
+      }
+    }, 200);
+  }, []);
+
   // --- TEXT-TO-SPEECH (Browser-Native SpeechSynthesis — Free, No API Cost) ---
   const speakVoiceResponse = useCallback((text: string, onComplete?: () => void) => {
     unlockMobileAudio();
@@ -411,6 +396,22 @@ export function VoiceAssistantModal({
       return;
     }
 
+    let finished = false;
+    let safetyTimer: any = null;
+    const finishSpeech = () => {
+      if (finished) return;
+      finished = true;
+      if (safetyTimer) clearTimeout(safetyTimer);
+      if (onComplete) onComplete();
+      restartContinuousListening();
+    };
+
+    // Safety fallback timeout: if TTS hangs or never fires onend, guarantee restart of listening
+    const safetyTimeoutMs = Math.min(10000, Math.max(2500, text.length * 80 + 1000));
+    safetyTimer = setTimeout(() => {
+      finishSpeech();
+    }, safetyTimeoutMs);
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.15;
     utterance.pitch = 1.0;
@@ -421,42 +422,11 @@ export function VoiceAssistantModal({
     ) || voices.find((v) => v.lang.startsWith('en'));
     if (preferredVoice) utterance.voice = preferredVoice;
 
-    utterance.onend = () => {
-      if (onComplete) onComplete();
-      restartContinuousListening();
-    };
-    utterance.onerror = () => {
-      if (onComplete) onComplete();
-      restartContinuousListening();
-    };
+    utterance.onend = finishSpeech;
+    utterance.onerror = finishSpeech;
 
     window.speechSynthesis.speak(utterance);
-  }, [unlockMobileAudio]);
-
-  // --- RESTART CONTINUOUS LISTENING ---
-  const restartContinuousListening = useCallback(() => {
-    if (!recognitionRef.current) return;
-    isProcessingRef.current = false;
-    shouldRestartRef.current = true;
-    setAssistantState('listening');
-    setTranscript('');
-    setSpokenText('');
-
-    setTimeout(() => {
-      if (!shouldRestartRef.current) return;
-      try {
-        recognitionRef.current.start();
-      } catch (err: any) {
-        if (err.name !== 'InvalidStateError') {
-          setTimeout(() => {
-            if (shouldRestartRef.current) {
-              try { recognitionRef.current.start(); } catch {}
-            }
-          }, 400);
-        }
-      }
-    }, 250);
-  }, []);
+  }, [unlockMobileAudio, restartContinuousListening]);
 
   // --- SSE PERSISTENT SESSION MANAGEMENT ---
   const startSSESession = useCallback(async () => {
@@ -1517,22 +1487,38 @@ export function VoiceAssistantModal({
   );
 
 
+  // --- REFS FOR SPEECH RECOGNITION LISTENERS ---
+  // Using refs prevents tearing down and re-instantiating SpeechRecognition on every state change
+  const processVoiceCommandRef = useRef(processVoiceCommand);
+  processVoiceCommandRef.current = processVoiceCommand;
+
+  const speakVoiceResponseRef = useRef(speakVoiceResponse);
+  speakVoiceResponseRef.current = speakVoiceResponse;
+
+  const assistantStateRef = useRef(assistantState);
+  assistantStateRef.current = assistantState;
+
   // --- SPEECH RECOGNITION INIT (Optimized for Laptop & Mobile browsers) ---
   const interimTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionAPI) { setRecognitionAvailable(false); return; }
+    if (!SpeechRecognitionAPI) {
+      setRecognitionAvailable(false);
+      return;
+    }
 
     const rec = new SpeechRecognitionAPI();
-    // Using continuous = false on ALL devices ensures Chrome Desktop & Mobile fire onresult / onend reliably
     rec.continuous = false;
     rec.interimResults = true;
     rec.lang = 'en-US';
 
     rec.onstart = () => {
-      if (!isProcessingRef.current) setAssistantState('listening');
+      if (!isProcessingRef.current) {
+        setAssistantState('listening');
+      }
+      setActionNotice(null);
     };
 
     rec.onresult = (event: any) => {
@@ -1565,10 +1551,12 @@ export function VoiceAssistantModal({
         }
         if (hasWake && !command) {
           setTranscript('Listening...');
-          speakVoiceResponse("I'm listening. What would you like me to do?");
+          speakVoiceResponseRef.current("I'm listening. What would you like me to do?");
           return;
         }
-        if (command.length > 1) processVoiceCommand(command);
+        if (command.length > 1) {
+          processVoiceCommandRef.current(command);
+        }
       };
 
       if (finalText) {
@@ -1593,53 +1581,79 @@ export function VoiceAssistantModal({
     };
 
     rec.onerror = (event: any) => {
+      console.warn('[SPEECH RECOGNITION ERROR]', event.error);
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         setRecognitionAvailable(false);
         setAssistantState('idle');
+        setActionNotice('⚠️ Microphone access blocked. Please check browser microphone permissions.');
       } else if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'network') {
         // Auto-retry on transient errors on laptops & mobiles
-        if (!isProcessingRef.current && shouldRestartRef.current) {
-          setTimeout(() => { try { rec.start(); } catch {} }, 400);
+        if (!isProcessingRef.current && shouldRestartRef.current && assistantStateRef.current !== 'speaking') {
+          setTimeout(() => {
+            if (!isProcessingRef.current && shouldRestartRef.current && assistantStateRef.current !== 'speaking' && recognitionRef.current) {
+              try { recognitionRef.current.start(); } catch {}
+            }
+          }, 350);
         }
       }
     };
 
     rec.onend = () => {
-      if (!isProcessingRef.current && shouldRestartRef.current && assistantState !== 'speaking') {
+      if (!isProcessingRef.current && shouldRestartRef.current && assistantStateRef.current !== 'speaking') {
         setTimeout(() => {
-          if (!isProcessingRef.current && shouldRestartRef.current) {
-            try { rec.start(); } catch {}
+          if (!isProcessingRef.current && shouldRestartRef.current && assistantStateRef.current !== 'speaking' && recognitionRef.current) {
+            try { recognitionRef.current.start(); } catch {}
           }
-        }, 250);
+        }, 200);
       }
     };
 
     recognitionRef.current = rec;
-    return () => { shouldRestartRef.current = false; try { rec.stop(); } catch {} };
-  }, [processVoiceCommand, speakVoiceResponse, assistantState]);
+    return () => {
+      shouldRestartRef.current = false;
+      try { rec.stop(); } catch {}
+    };
+  }, []); // Run ONCE on mount! NEVER re-runs or cancels rec on state updates!
 
   // --- START WHEN MODAL OPENS ---
   useEffect(() => {
-    if (isOpen && recognitionRef.current) {
+    let startTimer: any = null;
+
+    if (isOpen) {
       isProcessingRef.current = false;
       shouldRestartRef.current = true;
       setIsMinimized(false);
       setAssistantState('listening');
-      setTranscript(''); setSpokenText(''); setActionNotice(null); setCommandLog([]);
+      setTranscript('');
+      setSpokenText('');
+      setActionNotice(null);
+      setCommandLog([]);
 
-      // Proactively acquire microphone permissions & screen wake lock to prevent background tab sleep
+      // 1. Proactively check mic permission and acquire display wake lock
       acquireKeepAwakePermissions();
 
-      setTimeout(() => { try { recognitionRef.current.start(); } catch {} }, 200);
+      // 2. Start speech recognition cleanly
+      startTimer = setTimeout(() => {
+        if (shouldRestartRef.current && recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (err: any) {
+            if (err.name !== 'InvalidStateError') {
+              try { recognitionRef.current.start(); } catch {}
+            }
+          }
+        }
+      }, 250);
 
-      // Connect persistent SSE session loop
+      // 3. Connect persistent SSE session loop
       startSSESession();
 
+      // 4. Greeting if not greeted
       if (!hasGreetedRef.current) {
         setTimeout(() => {
           const u = getUserFirstName();
           speakVoiceResponse(generateGreeting(u));
-        }, 500);
+        }, 600);
         hasGreetedRef.current = true;
       }
     }
@@ -1655,6 +1669,7 @@ export function VoiceAssistantModal({
     }
 
     return () => {
+      if (startTimer) clearTimeout(startTimer);
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       }
@@ -1674,7 +1689,7 @@ export function VoiceAssistantModal({
         hasGreetedRef.current = false;
       }
     };
-  }, [isOpen, speakVoiceResponse, startSSESession, acquireKeepAwakePermissions, releaseKeepAwakePermissions]);
+  }, [isOpen, speakVoiceResponse, startSSESession, acquireKeepAwakePermissions, releaseKeepAwakePermissions, getUserFirstName]);
 
   const toggleListening = () => {
     if (!recognitionRef.current) return;
