@@ -93,6 +93,17 @@ class ExtensionServiceWorker {
         sendResponse(actionResult);
         break;
 
+      case 'INSIGHT_OPEN_TAB':
+        const openedTab = await this.openAndLockTab(envelope.payload.url, envelope.payload.appName);
+        sendResponse(
+          ProtocolSecurity.createEnvelope(
+            'INSIGHT_EXTENSION_SERVICE_WORKER',
+            'INSIGHT_ACTION_STATUS',
+            { success: !!openedTab, targetTab: openedTab }
+          )
+        );
+        break;
+
       case 'INSIGHT_CANCEL_ACTION':
         const cancelResult = await this.cancelActiveAction(envelope.payload.actionId);
         sendResponse(cancelResult);
@@ -178,9 +189,60 @@ class ExtensionServiceWorker {
     });
   }
 
+  private async openAndLockTab(url: string, appName?: string): Promise<LockedTargetTab | null> {
+    if (typeof chrome === 'undefined' || !chrome.tabs) return null;
+    return new Promise((resolve) => {
+      chrome.tabs.query({}, (tabs: any[]) => {
+        let matchingTab: any = null;
+        try {
+          const targetHost = new URL(url).hostname.replace(/^www\./, '');
+          matchingTab = (tabs || []).find((t: any) => {
+            try {
+              const tabHost = new URL(t.url || '').hostname.replace(/^www\./, '');
+              return tabHost && targetHost && (tabHost === targetHost || tabHost.endsWith('.' + targetHost) || targetHost.endsWith('.' + tabHost));
+            } catch {
+              return false;
+            }
+          });
+        } catch {}
+
+        if (matchingTab && matchingTab.id) {
+          chrome.tabs.update(matchingTab.id, { url, active: true }, (tab: any) => {
+            this.activeTargetTab = {
+              tabId: matchingTab.id,
+              windowId: matchingTab.windowId,
+              url: url,
+              application: appName || this.detectAppNameFromUrl(url),
+              lockedAt: Date.now(),
+            };
+            resolve(this.activeTargetTab);
+          });
+        } else {
+          chrome.tabs.create({ url, active: true }, (newTab: any) => {
+            if (!newTab || !newTab.id) {
+              resolve(null);
+              return;
+            }
+            this.activeTargetTab = {
+              tabId: newTab.id,
+              windowId: newTab.windowId,
+              url: url,
+              application: appName || this.detectAppNameFromUrl(url),
+              lockedAt: Date.now(),
+            };
+            resolve(this.activeTargetTab);
+          });
+        }
+      });
+    });
+  }
+
   private detectAppNameFromUrl(url: string): string {
     const q = url.toLowerCase();
+    if (q.includes('amazon.')) return 'Amazon';
+    if (q.includes('flipkart.com')) return 'Flipkart';
     if (q.includes('youtube.com')) return 'YouTube';
+    if (q.includes('google.com')) return 'Google';
     if (q.includes('instagram.com')) return 'Instagram';
     if (q.includes('whatsapp.com')) return 'WhatsApp Web';
     return 'Web';

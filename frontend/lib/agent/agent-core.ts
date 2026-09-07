@@ -52,6 +52,43 @@ export class AgentCore {
     if (browserBridgeClient.isConnected()) {
       this.setState('EXECUTING');
 
+      // 1. Check if this is an app or website navigation command ("open amazon", "go to youtube", etc.)
+      const APP_URL_MAP: Record<string, { url: string; name: string }> = {
+        amazon: { url: 'https://www.amazon.in', name: 'Amazon' },
+        youtube: { url: 'https://www.youtube.com', name: 'YouTube' },
+        google: { url: 'https://www.google.com', name: 'Google' },
+        flipkart: { url: 'https://www.flipkart.com', name: 'Flipkart' },
+        instagram: { url: 'https://www.instagram.com', name: 'Instagram' },
+        whatsapp: { url: 'https://web.whatsapp.com', name: 'WhatsApp Web' },
+      };
+
+      const isOpeningApp = /^(?:open|launch|go to|take me to|bring up)\s+/i.test(userGoal);
+      const cleanedGoal = userGoal.replace(/^(?:open|launch|go to|take me to|bring up)\s+/i, '').trim().toLowerCase();
+      const matchedApp = APP_URL_MAP[cleanedGoal] || Object.entries(APP_URL_MAP).find(([k]) => cleanedGoal.includes(k) || (targetApp && targetApp.toLowerCase().includes(k)))?.[1];
+
+      if (isOpeningApp && matchedApp) {
+        const tab = await browserBridgeClient.openTab(matchedApp.url, matchedApp.name);
+        if (tab) {
+          screenStateManager.updateFromEmpiricalEvidence({
+            url: tab.url,
+            title: matchedApp.name,
+            application: matchedApp.name,
+            visibleText: `Opened ${matchedApp.name}`,
+            scrollPosition: { top: 0, total: 1000 },
+            loadingState: 'complete',
+            loginState: 'logged_in',
+            captchaState: 'clean',
+            timestamp: Date.now(),
+          });
+          this.setState('COMPLETED');
+          return {
+            success: true,
+            finalMessage: `Opened ${matchedApp.name}. I'm listening for your next command.`,
+            actionsExecuted: 1,
+          };
+        }
+      }
+
       // Target Tab Lock Verification (TargetTabLock + TARGET_MISMATCH check)
       const targetMatch = browserTabController.verifyTargetMatch(targetApp);
       if (!targetMatch.isMatch && targetMatch.expectedApp) {

@@ -98,6 +98,24 @@ export class BrowserBridgeClient implements BrowserBridgeInterface {
     });
   }
 
+  public async openTab(url: string, appName?: string): Promise<TargetTabLock | null> {
+    if (!this.isConnected()) return null;
+    return new Promise((resolve) => {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: 'INSIGHT_OPEN_TAB', payload: { url, appName } }, (res: any) => {
+          if (res && res.targetTab) {
+            browserTabController.setLockedTab(res.targetTab);
+            resolve(res.targetTab);
+          } else {
+            resolve(null);
+          }
+        });
+      } else {
+        resolve(null);
+      }
+    });
+  }
+
   public getActiveTargetTab(): TargetTabLock | null {
     return browserTabController.getLockedTab();
   }

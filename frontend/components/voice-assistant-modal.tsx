@@ -21,6 +21,8 @@ import { learningEngine } from '@/lib/brain/learning-engine';
 import { computerUseOrchestrator } from '@/lib/agent/computer-use-orchestrator';
 import { continuousSession } from '@/lib/agent/continuous-session';
 import { disambiguationEngine } from '@/lib/entities/disambiguation-engine';
+import { browserBridgeClient } from '@/lib/browser-bridge/browser-bridge-client';
+import { screenStateManager } from '@/lib/agent/screen-state-manager';
 
 
 interface VoiceAssistantModalProps {
@@ -209,16 +211,37 @@ export function VoiceAssistantModal({
       }
     }
 
-    // 2. Always open cleanly in a NEW TAB (_blank) with pop-up block detection & fallback
+    // 2. If extension bridge is connected, open and lock companion tab without popup block or page unload
+    if (browserBridgeClient.isConnected()) {
+      browserBridgeClient.openTab(webUrl, appLabel).then((locked) => {
+        if (locked) {
+          screenStateManager.updateFromEmpiricalEvidence({
+            url: locked.url,
+            title: appLabel || locked.application,
+            application: appLabel || locked.application,
+            visibleText: `Opened ${appLabel || locked.application}`,
+            scrollPosition: { top: 0, total: 1000 },
+            loadingState: 'complete',
+            loginState: 'logged_in',
+            captchaState: 'clean',
+            timestamp: Date.now(),
+          });
+        }
+      }).catch((e) => console.warn('[Voice Action] extension openTab error:', e));
+      return;
+    }
+
+    // 3. Fallback: Always open cleanly in a NEW TAB (_blank) without unloading Insight AI
     try {
       const win = window.open(webUrl, '_blank', 'noopener,noreferrer');
       if (!win || win.closed || typeof win.closed === 'undefined') {
-        // Pop-up was blocked by browser! Fall back to current window location
-        window.location.href = webUrl;
+        // Pop-up was blocked by browser! Show inline button instead of destroying current page
+        setPendingLaunchUrl({ url: webUrl, label: appLabel || 'Open Link' });
+        setActionNotice('⚠️ Pop-up blocked: Tap button below to open');
       }
     } catch (e) {
       console.warn('[Voice Action] window.open error:', e);
-      try { window.location.href = webUrl; } catch {}
+      setPendingLaunchUrl({ url: webUrl, label: appLabel || 'Open Link' });
     }
   }, []);
 
@@ -300,6 +323,9 @@ export function VoiceAssistantModal({
       try { audioRef.current.pause(); audioRef.current = null; } catch {}
     }
 
+    // Pause speech recognition while assistant speaks to prevent acoustic self-triggering
+    try { recognitionRef.current?.stop(); } catch {}
+
     setAssistantState('speaking');
     setSpokenText(text);
 
@@ -337,14 +363,24 @@ export function VoiceAssistantModal({
     if (!recognitionRef.current) return;
     isProcessingRef.current = false;
     shouldRestartRef.current = true;
-    setAssistantState('waiting');
+    setAssistantState('listening');
     setTranscript('');
     setSpokenText('');
 
     setTimeout(() => {
       if (!shouldRestartRef.current) return;
-      try { recognitionRef.current.start(); } catch {}
-    }, 200);
+      try {
+        recognitionRef.current.start();
+      } catch (err: any) {
+        if (err.name !== 'InvalidStateError') {
+          setTimeout(() => {
+            if (shouldRestartRef.current) {
+              try { recognitionRef.current.start(); } catch {}
+            }
+          }, 400);
+        }
+      }
+    }, 250);
   }, []);
 
   // --- SSE PERSISTENT SESSION MANAGEMENT ---
@@ -1101,9 +1137,10 @@ export function VoiceAssistantModal({
         const allNames = [key, ...(app.aliases || [])];
         for (const name of allNames) {
           if (cleanedForAppMatch === name || cleanedForAppMatch === `${name} app` || cleanedForAppMatch === `the ${name}` || cleanedForAppMatch === `the ${name} app`) {
-            setActionNotice(`✅ Opening ${key.charAt(0).toUpperCase() + key.slice(1)} App`);
-            safeOpenUrl(app.web, app.native);
-            speakVoiceResponse(`Opening ${key.charAt(0).toUpperCase() + key.slice(1)} app.`);
+            const formatted = key.charAt(0).toUpperCase() + key.slice(1);
+            setActionNotice(`✅ Opening ${formatted}`);
+            safeOpenUrl(app.web, app.native, formatted);
+            speakVoiceResponse(`Opening ${formatted}. What would you like me to do next?`);
             return true;
           }
         }
@@ -1248,6 +1285,19 @@ export function VoiceAssistantModal({
       try { recognitionRef.current?.stop(); } catch {}
 
       try {
+        // 0. Active HITL or Safety Confirmation waiting for spoken answer
+        if (hitlQuestion) {
+          sendHITLAnswer(hitlQuestion.questionId, spokenTranscript);
+          speakVoiceResponse(`Understood: ${spokenTranscript}. Proceeding.`);
+          return;
+        }
+        if (safetyConfirm) {
+          const affirmative = /^(yes|confirm|proceed|place\s+order|buy|do\s+it|ok|okay)\b/i.test(spokenTranscript.trim());
+          sendHITLAnswer(safetyConfirm.questionId, affirmative ? 'yes' : 'no');
+          speakVoiceResponse(affirmative ? 'Proceeding with purchase.' : 'Purchase cancelled.');
+          return;
+        }
+
         // Fast-path check (0ms latency, 0 API Tokens consumed!) — only handles automation/app/search commands
         const handled = matchClientInstantAction(spokenTranscript);
         if (handled) return;
@@ -1388,7 +1438,7 @@ export function VoiceAssistantModal({
         isProcessingRef.current = false;
       }
     },
-    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage]
+    [hasActiveDocuments, matchClientInstantAction, safeOpenUrl, speakVoiceResponse, onTriggerUpload, onNewChat, onOpenHistory, onOpenAuth, onInstallApp, onAskDocumentQuestion, onSendChatMessage, hitlQuestion, safetyConfirm, sendHITLAnswer]
   );
 
 
@@ -1480,14 +1530,18 @@ export function VoiceAssistantModal({
     };
 
     rec.onend = () => {
-      if (!isProcessingRef.current && shouldRestartRef.current) {
-        setTimeout(() => { try { rec.start(); } catch {} }, 200);
+      if (!isProcessingRef.current && shouldRestartRef.current && assistantState !== 'speaking') {
+        setTimeout(() => {
+          if (!isProcessingRef.current && shouldRestartRef.current) {
+            try { rec.start(); } catch {}
+          }
+        }, 250);
       }
     };
 
     recognitionRef.current = rec;
     return () => { shouldRestartRef.current = false; try { rec.stop(); } catch {} };
-  }, [processVoiceCommand, speakVoiceResponse]);
+  }, [processVoiceCommand, speakVoiceResponse, assistantState]);
 
   // --- START WHEN MODAL OPENS ---
   useEffect(() => {
@@ -1499,6 +1553,9 @@ export function VoiceAssistantModal({
       setTranscript(''); setSpokenText(''); setActionNotice(null); setCommandLog([]);
 
       setTimeout(() => { try { recognitionRef.current.start(); } catch {} }, 200);
+
+      // Connect persistent SSE session loop
+      startSSESession();
 
       if (!hasGreetedRef.current) {
         setTimeout(() => {
@@ -1514,11 +1571,18 @@ export function VoiceAssistantModal({
         shouldRestartRef.current = false;
         if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
         if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} }
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        setSseConnected(false);
+        setSseSessionId(null);
+        setSseToken(null);
         isProcessingRef.current = false;
         hasGreetedRef.current = false;
       }
     };
-  }, [isOpen, speakVoiceResponse]);
+  }, [isOpen, speakVoiceResponse, startSSESession]);
 
   const toggleListening = () => {
     if (!recognitionRef.current) return;

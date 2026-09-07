@@ -20,6 +20,7 @@ export interface BrowserBridgeInterface {
   performHandshake(): Promise<{ connected: boolean; extensionVersion?: string }>;
   discoverTabs(): Promise<Array<{ tabId: number; title: string; url: string; appName: string }>>;
   lockTargetTab(tabId: number, appName: string): Promise<TargetTabLock | null>;
+  openTab(url: string, appName?: string): Promise<TargetTabLock | null>;
   getActiveTargetTab(): TargetTabLock | null;
   executeAction(payload: ExtensionActionPayload, signal?: AbortSignal): Promise<ExtensionActionStatusReport>;
   cancelAction(actionId: string): Promise<boolean>;

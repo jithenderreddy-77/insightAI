@@ -14,6 +14,7 @@ import { taskContextManager } from './task-context';
 import { screenStateManager } from './screen-state-manager';
 import { agentCore } from './agent-core';
 import { intentRouter, type IntentClassification } from './intent-router';
+import { inPageActionExecutor } from './in-page-action-executor';
 
 export interface ContinuousSessionEvent {
   type: 'STARTED' | 'LISTENING' | 'CLASSIFYING' | 'EXECUTING' | 'WAITING_FOR_USER' | 'COMPLETED' | 'STOPPED' | 'BARGE_IN';
@@ -28,9 +29,11 @@ export class ContinuousSession {
   private eventListeners: Array<(evt: ContinuousSessionEvent) => void> = [];
   private commandContext: string[] = []; // Short-term context for multi-step chains
   private isExecuting: boolean = false;
+  private sessionId: string = 'default_continuous_session';
 
-  public startSession() {
+  public startSession(sessionId?: string) {
     this.active = true;
+    if (sessionId) this.sessionId = sessionId;
     this.commandContext = [];
     this.emitEvent({ type: 'STARTED', message: 'Continuous Computer-Use Session active' });
     this.emitEvent({ type: 'LISTENING' });
@@ -141,13 +144,28 @@ export class ContinuousSession {
       let result: { success: boolean; finalMessage: string; actionsExecuted: number };
 
       if (intent.intent === 'IN_PAGE_ACTION') {
-        // TODO: Component 5 will add inPageActionExecutor.execute() here
-        // For now, route through agentCore which already handles extension bridge
-        result = await agentCore.executeGoal(
-          interpreted.normalizedCommand,
-          interpreted.targetApp,
+        const inPageRes = await inPageActionExecutor.execute(
+          rawCommand,
+          this.sessionId,
           this.currentAbortController.signal
         );
+
+        if (inPageRes.requiresConfirmation && inPageRes.confirmationQuestion) {
+          this.currentAbortController = null;
+          this.isExecuting = false;
+          onSpeechFeedback?.(inPageRes.confirmationQuestion);
+          this.emitEvent({
+            type: 'WAITING_FOR_USER',
+            message: inPageRes.confirmationQuestion,
+          });
+          return { shouldContinueListening: true, responseMessage: inPageRes.confirmationQuestion };
+        }
+
+        result = {
+          success: inPageRes.success,
+          finalMessage: inPageRes.message,
+          actionsExecuted: inPageRes.success ? 1 : 0,
+        };
       } else {
         // NAVIGATION: use existing agent core pipeline
         result = await agentCore.executeGoal(

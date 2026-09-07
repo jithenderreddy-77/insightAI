@@ -16,6 +16,7 @@ export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth/session-jwt';
 import { sessionStateManager } from '@/lib/agent/session-state';
+import { continuousSession } from '@/lib/agent/continuous-session';
 
 interface CommandBody {
   sessionId: string;
@@ -114,17 +115,31 @@ export async function POST(req: Request) {
         commandIndex: session.commandHistory.length,
       });
 
-      // TODO: Component 2+3 will wire this to intentRouter → agentCore / inPageActionExecutor
-      // For now, acknowledge receipt and emit action:executing
+      // Emit action executing event over SSE
       sessionStateManager.emitEvent(body.sessionId, 'action:executing', {
         command,
         message: `Processing: "${command}"`,
       });
 
-      // Placeholder response — will be replaced by real orchestrator pipeline
+      // Execute through ContinuousSession pipeline
+      continuousSession.startSession(body.sessionId);
+      const execResult = await continuousSession.handleCommand(command, (speechMsg) => {
+        sessionStateManager.emitEvent(body.sessionId, 'action:log', {
+          message: `Speech: "${speechMsg}"`,
+        });
+      });
+
+      // Emit completed event
+      sessionStateManager.emitEvent(body.sessionId, 'action:completed', {
+        command,
+        message: execResult.responseMessage,
+        shouldContinueListening: execResult.shouldContinueListening,
+      });
+
       return NextResponse.json({
         success: true,
-        message: `Command queued: "${command}"`,
+        message: execResult.responseMessage,
+        shouldContinueListening: execResult.shouldContinueListening,
         sessionId: body.sessionId,
         commandIndex: session.commandHistory.length,
       });

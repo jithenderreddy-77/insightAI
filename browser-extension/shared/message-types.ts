@@ -11,7 +11,8 @@ export type BridgeMessageType =
   | 'INSIGHT_PERCEIVE_PAGE'
   | 'INSIGHT_GET_PAGE_STATE'
   | 'INSIGHT_CANCEL_ACTION'
-  | 'INSIGHT_GET_DOM_SNAPSHOT';
+  | 'INSIGHT_GET_DOM_SNAPSHOT'
+  | 'INSIGHT_OPEN_TAB';
 
 export type ExtensionActionLifecycle =
   | 'ACTION_REQUESTED'
